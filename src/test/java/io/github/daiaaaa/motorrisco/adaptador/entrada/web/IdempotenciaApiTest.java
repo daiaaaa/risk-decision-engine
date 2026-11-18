@@ -71,7 +71,7 @@ class IdempotenciaApiTest {
     }
 
     private ResultActions avaliar(String idTransacao, String valor) throws Exception {
-        return mvc.perform(post("/avaliacoes")
+        return mvc.perform(post("/avaliacoes").with(Tokens.avaliador())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {"idTransacao":"%s","idCliente":"cliente-001","idDispositivo":"dispositivo-abc",

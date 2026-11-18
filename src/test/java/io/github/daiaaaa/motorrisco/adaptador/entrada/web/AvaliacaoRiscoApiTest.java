@@ -67,7 +67,7 @@ class AvaliacaoRiscoApiTest {
 
     @Test
     void requisicaoInvalidaRetornaProblemDetailEmPortugues() throws Exception {
-        mvc.perform(post("/avaliacoes")
+        mvc.perform(post("/avaliacoes").with(Tokens.avaliador())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"idTransacao":"","idCliente":"cliente-001",
@@ -80,7 +80,7 @@ class AvaliacaoRiscoApiTest {
 
     /** Cada chamada usa um idTransacao novo, para que um teste não reaproveite a avaliação de outro. */
     private ResultActions avaliar(String idCliente, String idDispositivo, String valor) throws Exception {
-        return mvc.perform(post("/avaliacoes")
+        return mvc.perform(post("/avaliacoes").with(Tokens.avaliador())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                         {"idTransacao":"%s","idCliente":"%s","idDispositivo":"%s",

@@ -36,7 +36,7 @@ class FonteDegradadaApiTest {
     @Test
     void fonteLentaNaoDerrubaAAvaliacao() throws Exception {
         // Dispositivo conhecido e valor habitual: com todas as fontes no ar, seria APROVAR.
-        mvc.perform(post("/avaliacoes")
+        mvc.perform(post("/avaliacoes").with(Tokens.avaliador())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"idTransacao":"%s","idCliente":"cliente-001","idDispositivo":"dispositivo-abc",

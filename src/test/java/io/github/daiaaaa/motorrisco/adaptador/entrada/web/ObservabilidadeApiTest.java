@@ -40,7 +40,7 @@ class ObservabilidadeApiTest {
     void avaliacaoGeraMetricasDeDecisaoEDeFonte() throws Exception {
         double antes = decisoesAprovadas();
 
-        mvc.perform(post("/avaliacoes")
+        mvc.perform(post("/avaliacoes").with(Tokens.avaliador())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"idTransacao":"%s","idCliente":"cliente-001","idDispositivo":"dispositivo-abc",

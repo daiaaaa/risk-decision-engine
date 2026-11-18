@@ -12,6 +12,24 @@ services:
     ports:
       - "9092:9092"
 
+  # Servidor de autorização (OAuth2/OpenID Connect). Console em http://localhost:8180
+  # (admin/admin). O realm motor-risco é importado na subida. Apenas para uso local.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.2
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Emissor fixo: o token sempre sai com iss=http://localhost:8180/..., inclusive quando
+      # o Prometheus pede pela rede interna do Docker (keycloak:8080). Sem isso, a aplicação
+      # recusaria o token do Prometheus por emissor diferente.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8180:8080"
+    volumes:
+      - ./seguranca/keycloak:/opt/keycloak/data/import:ro
+
   # Coleta as métricas da aplicação, que roda na máquina host (fora do Docker).
   prometheus:
     image: prom/prometheus:v3.16.0
@@ -23,6 +41,8 @@ services:
     extra_hosts:
       # Necessário no Linux; no Docker Desktop (Windows/Mac) o nome já existe.
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - keycloak
 
   # Painéis em http://localhost:3000. Acesso anônimo só de leitura; para editar,
   # entre com admin/admin. Configuração apenas para uso local.

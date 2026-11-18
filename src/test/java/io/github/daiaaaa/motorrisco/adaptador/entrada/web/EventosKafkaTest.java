@@ -76,7 +76,7 @@ class EventosKafkaTest {
         aguardar(() -> idsEmRevisao().contains(idRevisar));
 
         assertThat(idsEmRevisao()).doesNotContain(idAprovada);
-        mvc.perform(get("/revisoes"))
+        mvc.perform(get("/revisoes").with(Tokens.analista()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[*].idTransacao", hasItem(idRevisar)));
     }
@@ -98,7 +98,7 @@ class EventosKafkaTest {
     }
 
     private ResultActions avaliar(String idTransacao, String idDispositivo) throws Exception {
-        return mvc.perform(post("/avaliacoes")
+        return mvc.perform(post("/avaliacoes").with(Tokens.avaliador())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"idTransacao":"%s","idCliente":"cliente-001","idDispositivo":"%s",

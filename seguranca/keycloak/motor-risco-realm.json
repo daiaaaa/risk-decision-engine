@@ -1,0 +1,115 @@
+{
+  "realm": "motor-risco",
+  "displayName": "Motor de Decisão de Risco",
+  "enabled": true,
+  "accessTokenLifespan": 300,
+  "sslRequired": "none",
+  "roles": {
+    "realm": [
+      { "name": "avaliador", "description": "Pode pedir avaliação de risco (POST /avaliacoes)" },
+      { "name": "analista", "description": "Pode consultar as revisões pendentes (GET /revisoes)" },
+      { "name": "monitoramento", "description": "Pode ler métricas e detalhes de saúde (/actuator/**)" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "sistema-pagamentos",
+      "name": "Sistema de pagamentos (máquina para máquina)",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "segredo-dev-sistema-pagamentos",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audiencia-motor-risco-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "motor-risco-api", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "papeis-do-realm",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": { "claim.name": "realm_access.roles", "multivalued": "true", "access.token.claim": "true", "id.token.claim": "false", "jsonType.label": "String" }
+        }
+      ]
+    },
+    {
+      "clientId": "prometheus",
+      "name": "Prometheus (coleta de métricas)",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "segredo-dev-prometheus",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "audiencia-motor-risco-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "motor-risco-api", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "papeis-do-realm",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": { "claim.name": "realm_access.roles", "multivalued": "true", "access.token.claim": "true", "id.token.claim": "false", "jsonType.label": "String" }
+        }
+      ]
+    },
+    {
+      "clientId": "painel-analistas",
+      "name": "Painel dos analistas de fraude",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "attributes": { "pkce.code.challenge.method": "S256" },
+      "protocolMappers": [
+        {
+          "name": "audiencia-motor-risco-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.custom.audience": "motor-risco-api", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "papeis-do-realm",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": { "claim.name": "realm_access.roles", "multivalued": "true", "access.token.claim": "true", "id.token.claim": "false", "jsonType.label": "String" }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "analista",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Ana",
+      "lastName": "Lista",
+      "email": "analista@exemplo.com.br",
+      "credentials": [ { "type": "password", "value": "analista", "temporary": false } ],
+      "realmRoles": ["analista"]
+    },
+    {
+      "username": "service-account-sistema-pagamentos",
+      "enabled": true,
+      "serviceAccountClientId": "sistema-pagamentos",
+      "realmRoles": ["avaliador"]
+    },
+    {
+      "username": "service-account-prometheus",
+      "enabled": true,
+      "serviceAccountClientId": "prometheus",
+      "realmRoles": ["monitoramento"]
+    }
+  ]
+}

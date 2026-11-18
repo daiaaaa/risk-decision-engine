@@ -9,7 +9,7 @@ antifraude e score de risco faz.
 
 ## Tecnologias
 
-Java 21 · Spring Boot 4 · Resilience4j · Redis · Apache Kafka · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
+Java 21 · Spring Boot 4 · Spring Security (OAuth2 Resource Server) · Keycloak · Resilience4j · Redis · Apache Kafka · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
 
 ## Arquitetura
 
@@ -36,7 +36,8 @@ adaptador/saida/sinal ───────────┘  (as fontes de sinais
 | `adaptador.saida.memoria` | `FilaRevisaoEmMemoria`: transações aguardando analista (substituída pelo Camunda na fase 6). |
 | `adaptador.entrada.kafka` | `ConsumidorDecisoes`: encaminha as decisões `REVISAR` para a revisão manual. |
 | `adaptador.entrada.web` | `POST /avaliacoes`, `GET /revisoes`, validação da entrada, montagem da resposta e tratamento de erros. |
-| `configuracao` | Conecta as classes sem framework ao Spring. |
+| `adaptador.entrada.web.seguranca` | `ConversorPapeisKeycloak`: papéis do token viram autoridades do Spring Security. |
+| `configuracao` | Conecta as classes sem framework ao Spring. `ConfiguracaoSeguranca` define quem acessa cada endpoint. |
 
 ### Por que as chamadas são paralelas
 
@@ -284,7 +285,8 @@ aplicação continua decidindo (sem idempotência e sem eventos), então um orqu
 Kubernetes não deve tirá-la do ar. O `/actuator/health` completo mostra o estado de cada
 dependência para quem está investigando.
 
-Os endpoints do Actuator estão abertos; a fase 5 os protege junto com a API.
+Os endpoints do Actuator exigem o papel `monitoramento`, exceto `/actuator/health/**` (ver
+[Segurança](#segurança)).
 
 ### Demonstração
 
@@ -302,12 +304,76 @@ alerta CircuitoAberto:    pending aos 4 s, firing aos 34 s (fonte=historico-clie
 alerta MuitasDecisoesDegradadas: pending
 ```
 
+## Segurança
+
+A API é um **OAuth2 Resource Server**: não faz login nem guarda senhas. Cada requisição traz
+um JWT emitido pelo Keycloak, e a aplicação confere a assinatura (chaves públicas do Keycloak,
+JWKS), a validade, o emissor (`iss`) e a audiência (`aud`).
+
+| Endpoint | Papel exigido | Quem tem | Fluxo OAuth2 |
+|---|---|---|---|
+| `POST /avaliacoes` | `avaliador` | cliente `sistema-pagamentos` | `client_credentials` (máquina para máquina) |
+| `GET /revisoes` | `analista` | usuário `analista` (cliente `painel-analistas`) | `authorization_code` com PKCE |
+| `/actuator/**` | `monitoramento` | cliente `prometheus` | `client_credentials` |
+| `/actuator/health/**` | nenhum | probes do orquestrador | sem token |
+| qualquer outro | negado | — | — |
+
+`401` significa sem token ou token inválido; `403` significa token válido sem o papel.
+
+### Decisões de projeto
+
+- **Audiência obrigatória.** O Keycloak coloca `motor-risco-api` no `aud`, e a API recusa
+  tokens sem isso. Sem essa checagem, um token emitido para outro sistema do mesmo Keycloak
+  seria aceito.
+- **Papéis do Keycloak viram autoridades do Spring.** O Keycloak coloca os papéis em
+  `realm_access.roles`; o `ConversorPapeisKeycloak` os transforma em `ROLE_<papel>`.
+- **Tudo o que não está liberado é negado** (`denyAll`), então um endpoint novo nasce fechado.
+- **Sem sessão e sem CSRF.** O token vai no cabeçalho `Authorization`, não num cookie, e a
+  proteção CSRF existe contra cookies enviados automaticamente pelo navegador.
+- **Saúde sem detalhes para anônimos.** As probes veem só `UP`/`DOWN`; o estado de cada
+  dependência aparece só para o papel `monitoramento`.
+- **O Prometheus também se autentica**, com `client_credentials`, para coletar as métricas.
+- **Emissor fixo** (`KC_HOSTNAME`). O Keycloak sempre emite `iss=http://localhost:8180/...`,
+  inclusive quando o Prometheus pede o token pela rede interna do Docker. Sem isso, o token do
+  Prometheus seria recusado por emissor diferente.
+- **Segredos só de desenvolvimento.** O realm (`seguranca/keycloak/`) tem segredos e senha
+  públicos de propósito, para rodar na máquina local. Em produção, eles ficam num cofre.
+
+### Demonstração com o Keycloak real
+
+```
+Token do sistema-pagamentos (client_credentials):
+  iss=http://localhost:8180/realms/motor-risco  aud=motor-risco-api  azp=sistema-pagamentos
+  papeis=avaliador  validade=300 s
+
+POST /avaliacoes sem token:                  401
+POST /avaliacoes com token do sistema:       200
+GET  /revisoes como analista:                200
+GET  /revisoes como sistema-pagamentos:      403
+POST /avaliacoes como analista:              403
+token válido de outro realm (master):        401
+token com assinatura adulterada:             401
+/actuator/prometheus sem token:              401
+/actuator/health anônimo:                    UP, sem detalhes
+Prometheus coletando com o próprio token:    health=up
+```
+
+Para pedir um token na linha de comando:
+
+```bash
+curl -s -X POST http://localhost:8180/realms/motor-risco/protocol/openid-connect/token \
+  -d grant_type=client_credentials \
+  -d client_id=sistema-pagamentos -d client_secret=segredo-dev-sistema-pagamentos
+```
+
+e enviar no cabeçalho `Authorization: Bearer <access_token>`.
+
 ## Como rodar
 
 Requisitos: Java 21 e Docker. O Maven é baixado pelo wrapper.
 
 ```bash
-docker compose up -d          # sobe Redis, Kafka, Prometheus e Grafana
+docker compose up -d          # sobe Redis, Kafka, Keycloak, Prometheus e Grafana
 ./mvnw spring-boot:run        # Windows: mvnw.cmd spring-boot:run
 docker compose down           # derruba os contêineres
 ```
@@ -326,10 +392,18 @@ Testcontainers, então o Docker precisa estar rodando.
 
 ## Exemplos
 
+Os exemplos abaixo precisam de um token com o papel `avaliador` (ver [Segurança](#segurança)):
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/motor-risco/protocol/openid-connect/token \
+  -d grant_type=client_credentials -d client_id=sistema-pagamentos \
+  -d client_secret=segredo-dev-sistema-pagamentos | jq -r .access_token)
+```
+
 Dispositivo conhecido, valor habitual → `APROVAR` (pontuação 8):
 
 ```bash
-curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d '{
+curl -s -X POST localhost:8080/avaliacoes -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "idTransacao": "tx-1", "idCliente": "cliente-001",
   "idDispositivo": "dispositivo-abc", "valor": 300.00, "tipo": "PIX"
 }'
@@ -338,7 +412,7 @@ curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d
 Dispositivo novo → `REVISAR` (pontuação 40):
 
 ```bash
-curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d '{
+curl -s -X POST localhost:8080/avaliacoes -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "idTransacao": "tx-2", "idCliente": "cliente-001",
   "idDispositivo": "dispositivo-novo", "valor": 300.00, "tipo": "PIX"
 }'
@@ -347,7 +421,7 @@ curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d
 Dispositivo novo e valor acima de 5× a média → `NEGAR` (pontuação 78):
 
 ```bash
-curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d '{
+curl -s -X POST localhost:8080/avaliacoes -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{
   "idTransacao": "tx-3", "idCliente": "cliente-001",
   "idDispositivo": "dispositivo-novo", "valor": 3000.00, "tipo": "PIX"
 }'
@@ -383,5 +457,5 @@ título "Conflito de idempotência".
 - [x] **2b. Idempotência**: o mesmo `idTransacao` devolve a mesma decisão, com Redis
 - [x] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
 - [x] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus, alertas e Grafana
-- [ ] **5. Segurança**: OAuth2 / JWT com Keycloak
+- [x] **5. Segurança**: OAuth2 / JWT com Keycloak, papéis por endpoint, Actuator protegido
 - [ ] **6. Camunda 8**: processo BPMN de revisão manual para as decisões `REVISAR`

@@ -11,3 +11,9 @@ scrape_configs:
     metrics_path: /actuator/prometheus
     static_configs:
       - targets: ["host.docker.internal:8080"]
+    # O endpoint de métricas exige o papel "monitoramento". O Prometheus pede um token ao
+    # Keycloak (client_credentials) e o envia em cada coleta. Segredo só de desenvolvimento local.
+    oauth2:
+      client_id: prometheus
+      client_secret: segredo-dev-prometheus
+      token_url: http://keycloak:8080/realms/motor-risco/protocol/openid-connect/token
