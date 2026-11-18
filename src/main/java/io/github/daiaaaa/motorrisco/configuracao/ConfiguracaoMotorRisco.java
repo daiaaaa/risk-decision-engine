@@ -1,8 +1,11 @@
 package io.github.daiaaaa.motorrisco.configuracao;
 
+import io.github.daiaaaa.motorrisco.adaptador.saida.redis.RepositorioAvaliacoesRedis;
 import io.github.daiaaaa.motorrisco.adaptador.saida.resiliencia.ProvedorSinalResiliente;
+import io.github.daiaaaa.motorrisco.aplicacao.ServicoAvaliacaoIdempotente;
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoAvaliacaoRisco;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.ProvedorSinal;
+import io.github.daiaaaa.motorrisco.aplicacao.porta.RepositorioAvaliacoes;
 import io.github.daiaaaa.motorrisco.dominio.politica.CalculadoraRisco;
 import io.github.daiaaaa.motorrisco.dominio.politica.PoliticaDecisao;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -14,8 +17,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -96,5 +102,18 @@ public class ConfiguracaoMotorRisco {
                 })
                 .toList();
         return new ServicoAvaliacaoRisco(provedoresProtegidos, calculadora, politica, executorSinais, relogio);
+    }
+
+    @Bean
+    public RepositorioAvaliacoes repositorioAvaliacoes(StringRedisTemplate redis,
+                                                       JsonMapper json,
+                                                       @Value("${risco.idempotencia.validade}") Duration validade) {
+        return new RepositorioAvaliacoesRedis(redis, json, validade);
+    }
+
+    @Bean
+    public ServicoAvaliacaoIdempotente servicoAvaliacaoIdempotente(ServicoAvaliacaoRisco avaliador,
+                                                                   RepositorioAvaliacoes repositorio) {
+        return new ServicoAvaliacaoIdempotente(avaliador, repositorio);
     }
 }

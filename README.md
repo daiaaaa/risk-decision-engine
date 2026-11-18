@@ -9,7 +9,7 @@ antifraude e score de risco faz.
 
 ## Tecnologias
 
-Java 21 · Spring Boot 4 · Resilience4j · Maven · JUnit 5 · AssertJ
+Java 21 · Spring Boot 4 · Resilience4j · Redis · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
 
 ## Arquitetura
 
@@ -26,11 +26,12 @@ adaptador/saida/sinal ───────────┘  (as fontes de sinais
 |---|---|
 | `dominio.modelo` | `Transacao`, `SinalRisco`, `AvaliacaoRisco`, `Decisao`. Records imutáveis. |
 | `dominio.politica` | `CalculadoraRisco` (média ponderada) e `PoliticaDecisao` (limiares e regras bloqueantes). Sem código de framework. |
-| `aplicacao` | `ServicoAvaliacaoRisco`: dispara as fontes (fan-out), junta os resultados (fan-in), pontua e decide. |
-| `aplicacao.porta` | `ProvedorSinal`: o contrato que toda fonte de sinais implementa. |
+| `aplicacao` | `ServicoAvaliacaoRisco`: dispara as fontes (fan-out), junta os resultados (fan-in), pontua e decide. `ServicoAvaliacaoIdempotente`: garante a mesma decisão para o mesmo `idTransacao`. |
+| `aplicacao.porta` | `ProvedorSinal` (contrato das fontes de sinais) e `RepositorioAvaliacoes` (onde as avaliações ficam guardadas). |
 | `adaptador.saida.sinal` | Fontes simuladas: dispositivo, histórico do cliente e lista restritiva. |
 | `adaptador.saida.resiliencia` | `ProvedorSinalResiliente`: tempo limite, circuit breaker e fallback em volta de cada fonte. |
-| `adaptador.entrada.web` | `POST /avaliacoes`, validação da entrada e montagem da resposta. |
+| `adaptador.saida.redis` | `RepositorioAvaliacoesRedis`: guarda as avaliações no Redis com validade. |
+| `adaptador.entrada.web` | `POST /avaliacoes`, validação da entrada, montagem da resposta e tratamento de erros. |
 | `configuracao` | Conecta as classes sem framework ao Spring. |
 
 ### Por que as chamadas são paralelas
@@ -124,14 +125,66 @@ As cinco primeiras chamadas esperam o tempo limite. Quando a taxa de falha passa
 o circuito abre e as próximas chamadas pulam a fonte, então a latência cai de ~210 ms para
 ~60 ms enquanto a fonte se recupera.
 
+## Idempotência
+
+O `idTransacao` funciona como **chave de idempotência**. Se o cliente reenviar a mesma
+transação (por exemplo, depois de um timeout de rede), ele recebe a mesma decisão, sem que
+a transação seja avaliada de novo.
+
+| Situação | Resposta |
+|---|---|
+| Primeira vez que o `idTransacao` aparece | Avalia, grava no Redis e responde `200` com `X-Resposta-Repetida: false` |
+| Mesmo `idTransacao`, mesmos dados | Devolve a avaliação guardada (mesmo `idAvaliacao`) com `X-Resposta-Repetida: true` |
+| Mesmo `idTransacao`, dados diferentes | `409 Conflict`: devolver a decisão guardada seria responder sobre outra transação |
+
+Os "mesmos dados" são comparados por uma impressão digital SHA-256 de cliente, dispositivo,
+valor e tipo. `300`, `300.0` e `300.00` contam como o mesmo valor.
+
+### Decisões de projeto
+
+- **Requisições simultâneas:** a gravação usa `SET chave valor NX EX validade`, que é atômico:
+  só grava se a chave não existir. As duas requisições avaliam, mas só a primeira grava, e a
+  segunda devolve o resultado da primeira. Uma trava distribuída evitaria a avaliação dupla,
+  mas a avaliação não tem efeito colateral (só lê sinais), então o custo é só processamento.
+- **Redis fora do ar:** o motor continua avaliando, sem idempotência, e registra um aviso no
+  log. Parar a antifraude porque o cache caiu seria pior do que, no pior caso, avaliar de novo
+  uma transação repetida. Os tempos de conexão e de comando são de 200 ms, para que um Redis
+  fora do ar não segure a resposta.
+- **Avaliação degradada também é guardada:** se a resposta foi `REVISAR` porque uma fonte caiu,
+  o reenvio devolve `REVISAR`, mesmo que a fonte já tenha voltado. O cliente já recebeu essa
+  decisão, e ela não pode mudar.
+- **Validade de 24 h** (`risco.idempotencia.validade`): o Redis não cresce sem limite, e 24 h
+  cobre com folga qualquer reenvio automático.
+
+### Demonstração
+
+```
+1ª chamada (R$ 300):  HTTP 200 | repetida=false | idAvaliacao=8d1e0121-... | APROVAR
+2ª chamada (R$ 300):  HTTP 200 | repetida=true  | idAvaliacao=8d1e0121-... | APROVAR
+3ª chamada (R$ 9999): HTTP 409
+TTL da chave no Redis: 86400 s
+```
+
 ## Como rodar
 
-Requisito: Java 21. O Maven é baixado pelo wrapper.
+Requisitos: Java 21 e Docker. O Maven é baixado pelo wrapper.
 
 ```bash
+docker compose up -d          # sobe o Redis
 ./mvnw spring-boot:run        # Windows: mvnw.cmd spring-boot:run
+docker compose down           # derruba o Redis
+```
+
+A aplicação também sobe sem o Redis; nesse caso, funciona sem idempotência.
+
+### Testes
+
+```bash
 ./mvnw test                   # Windows: mvnw.cmd test
 ```
+
+Os testes de idempotência sobem um Redis real em Docker com Testcontainers, então o Docker
+precisa estar rodando.
 
 ## Exemplos
 
@@ -182,13 +235,14 @@ Exemplo de resposta:
 ```
 
 Uma entrada inválida devolve `400` no formato Problem Details (RFC 9457), com título
-"Requisição inválida".
+"Requisição inválida". Reaproveitar um `idTransacao` com outros dados devolve `409`, com
+título "Conflito de idempotência".
 
 ## Roteiro
 
 - [x] **1. Núcleo**: API REST, fontes de sinais em paralelo, pontuação, política de decisão e testes
 - [x] **2a. Resiliência**: tempo limite, circuit breaker e fallback (Resilience4j), decisão fail-safe
-- [ ] **2b. Idempotência**: o mesmo `idTransacao` devolve a mesma decisão, com Redis
+- [x] **2b. Idempotência**: o mesmo `idTransacao` devolve a mesma decisão, com Redis
 - [ ] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
 - [ ] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus e Grafana
 - [ ] **5. Segurança**: OAuth2 / JWT com Keycloak

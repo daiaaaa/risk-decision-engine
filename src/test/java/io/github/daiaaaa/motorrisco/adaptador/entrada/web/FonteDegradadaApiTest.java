@@ -7,6 +7,8 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.UUID;
+
 import static org.hamcrest.Matchers.lessThan;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -35,9 +37,9 @@ class FonteDegradadaApiTest {
         mvc.perform(post("/avaliacoes")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"idTransacao":"tx-1","idCliente":"cliente-001","idDispositivo":"dispositivo-abc",
+                                {"idTransacao":"%s","idCliente":"cliente-001","idDispositivo":"dispositivo-abc",
                                  "valor":300.00,"tipo":"PIX"}
-                                """))
+                                """.formatted(UUID.randomUUID())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.decisao").value("REVISAR"))
                 .andExpect(jsonPath("$.degradada").value(true))

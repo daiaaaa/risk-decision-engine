@@ -8,6 +8,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.util.UUID;
+
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -74,12 +76,13 @@ class AvaliacaoRiscoApiTest {
                 .andExpect(jsonPath("$.title").value("Requisição inválida"));
     }
 
+    /** Cada chamada usa um idTransacao novo, para que um teste não reaproveite a avaliação de outro. */
     private ResultActions avaliar(String idCliente, String idDispositivo, String valor) throws Exception {
         return mvc.perform(post("/avaliacoes")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
-                        {"idTransacao":"tx-1","idCliente":"%s","idDispositivo":"%s",
+                        {"idTransacao":"%s","idCliente":"%s","idDispositivo":"%s",
                          "valor":%s,"tipo":"PIX"}
-                        """.formatted(idCliente, idDispositivo, valor)));
+                        """.formatted(UUID.randomUUID(), idCliente, idDispositivo, valor)));
     }
 }
