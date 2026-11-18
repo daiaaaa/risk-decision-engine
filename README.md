@@ -1,194 +1,195 @@
 # risk-decision-engine
 
-Real-time risk decision engine for financial transactions (PIX, TED, boleto).
-It receives a transaction, queries several antifraud signal sources **in parallel**,
-combines them into a score and returns a decision: `APPROVE`, `REVIEW` or `DENY`.
+Motor de decisão de risco em tempo real para transações financeiras (PIX, TED, boleto).
+Ele recebe uma transação, consulta várias fontes de sinais antifraude **em paralelo**,
+combina os sinais em uma pontuação e devolve uma decisão: `APROVAR`, `REVISAR` ou `NEGAR`.
 
-A study project built in phases, modelling what an antifraud orchestration and
-risk-scoring platform does.
+Projeto de estudo construído em fases, que modela o que uma plataforma de orquestração
+antifraude e score de risco faz.
 
-## Stack
+## Tecnologias
 
 Java 21 · Spring Boot 4 · Resilience4j · Maven · JUnit 5 · AssertJ
 
-## Architecture
+## Arquitetura
 
-Hexagonal architecture (ports and adapters). Dependencies always point inwards.
+Arquitetura hexagonal (portas e adaptadores). As dependências sempre apontam para dentro.
 
 ```
-adapter/in/web  ──►  application  ──►  domain
-(REST API)           (orchestrator)    (rules, plain Java)
-                          ▲
-adapter/out/signal ───────┘  (signal sources implement the port)
+adaptador/entrada/web  ──►  aplicacao  ──►  dominio
+(API REST)                  (orquestrador)  (regras, Java puro)
+                                 ▲
+adaptador/saida/sinal ───────────┘  (as fontes de sinais implementam a porta)
 ```
 
-| Package | Responsibility |
+| Pacote | Responsabilidade |
 |---|---|
-| `domain.model` | `Transaction`, `RiskSignal`, `RiskAssessment`, `Decision`. Immutable records. |
-| `domain.policy` | `RiskScorer` (weighted average) and `DecisionPolicy` (thresholds and blocking rules). No framework code. |
-| `application` | `RiskAssessmentService`: fan-out to every provider, fan-in, score, decide. |
-| `application.port` | `SignalProvider`: the contract every signal source implements. |
-| `adapter.out.signal` | Simulated sources: device, customer history, deny list. |
-| `adapter.out.resilience` | `ResilientSignalProvider`: timeout, circuit breaker and fallback around each source. |
-| `adapter.in.web` | `POST /assessments`, input validation, response mapping. |
-| `config` | Wires the framework-free classes into Spring. |
+| `dominio.modelo` | `Transacao`, `SinalRisco`, `AvaliacaoRisco`, `Decisao`. Records imutáveis. |
+| `dominio.politica` | `CalculadoraRisco` (média ponderada) e `PoliticaDecisao` (limiares e regras bloqueantes). Sem código de framework. |
+| `aplicacao` | `ServicoAvaliacaoRisco`: dispara as fontes (fan-out), junta os resultados (fan-in), pontua e decide. |
+| `aplicacao.porta` | `ProvedorSinal`: o contrato que toda fonte de sinais implementa. |
+| `adaptador.saida.sinal` | Fontes simuladas: dispositivo, histórico do cliente e lista restritiva. |
+| `adaptador.saida.resiliencia` | `ProvedorSinalResiliente`: tempo limite, circuit breaker e fallback em volta de cada fonte. |
+| `adaptador.entrada.web` | `POST /avaliacoes`, validação da entrada e montagem da resposta. |
+| `configuracao` | Conecta as classes sem framework ao Spring. |
 
-### Why parallel calls
+### Por que as chamadas são paralelas
 
-Each signal source is a network call in a real system. Calling them one after
-another adds up the latencies; calling them in parallel makes the total latency
-equal to the slowest source. Calls run on Java 21 virtual threads, which keep
-waiting on I/O cheap.
+Num sistema real, cada fonte de sinais é uma chamada de rede. Chamar uma depois da outra
+soma as latências; chamar em paralelo faz a latência total ser a da fonte mais lenta.
+As chamadas rodam em virtual threads do Java 21, que tornam barata a espera por I/O.
 
-| Source | Simulated latency |
+| Fonte | Latência simulada |
 |---|---|
-| deny-list | 20 ms |
-| device | 50 ms |
-| customer-history | 80 ms |
-| **Sequential total** | 150 ms |
-| **Parallel total** | ~80 ms |
+| lista-restritiva | 20 ms |
+| dispositivo | 50 ms |
+| historico-cliente | 80 ms |
+| **Total em sequência** | 150 ms |
+| **Total em paralelo** | ~80 ms |
 
-## Decision rules
+## Regras de decisão
 
-Each source returns a `RiskSignal` with a score (0–100) and a weight.
+Cada fonte devolve um `SinalRisco` com uma pontuação (0 a 100) e um peso.
 
 ```
-final score = Σ(score × weight) / Σ(weight)      (rounded to the nearest integer)
+pontuação final = Σ(pontuação × peso) / Σ(peso)      (arredondada para o inteiro mais próximo)
 ```
 
-| Final score | Decision |
+| Pontuação final | Decisão |
 |---|---|
-| 0–39 | `APPROVE` |
-| 40–74 | `REVIEW` |
-| 75–100 | `DENY` |
+| 0 a 39 | `APROVAR` |
+| 40 a 74 | `REVISAR` |
+| 75 a 100 | `NEGAR` |
 
-A **blocking** signal (for example, a customer on the deny list) forces `DENY`
-regardless of the score. Blocking sources have weight 0, so they act only as rules.
-Thresholds are configurable in `application.properties`.
+Um sinal **bloqueante** (por exemplo, cliente na lista restritiva) força `NEGAR`,
+independentemente da pontuação. Fontes bloqueantes têm peso 0, então atuam só como regra.
+Os limiares são configuráveis no `application.properties`.
 
-### Simulated sources
+### Fontes simuladas
 
-| Source | Weight | Logic |
+| Fonte | Peso | Lógica |
 |---|---|---|
-| `device` | 50 | Known device for the customer → 5. Unknown device → 70. |
-| `customer-history` | 50 | Amount ≤ 2× the average → 10. > 2× → 45. > 5× → 85. No history → 60. |
-| `deny-list` | 0 | Customer on the list → blocking. |
+| `dispositivo` | 50 | Dispositivo conhecido do cliente → 5. Dispositivo desconhecido → 70. |
+| `historico-cliente` | 50 | Valor até 2× a média → 10. Acima de 2× → 45. Acima de 5× → 85. Sem histórico → 60. |
+| `lista-restritiva` | 0 | Cliente na lista → bloqueante. |
 
-Test data: `cust-001` (average R$ 500, device `device-abc`), `cust-002`
-(average R$ 2,000, devices `device-xyz` and `device-123`), `cust-blocked` (deny list).
+Dados de teste: `cliente-001` (média de R$ 500, dispositivo `dispositivo-abc`),
+`cliente-002` (média de R$ 2.000, dispositivos `dispositivo-xyz` e `dispositivo-123`) e
+`cliente-bloqueado` (na lista restritiva).
 
-## Running
+## Resiliência
 
-Requirements: Java 21. Maven is downloaded by the wrapper.
+Cada fonte de sinais é envolvida por um decorator (`ProvedorSinalResiliente`) construído com
+os módulos principais do Resilience4j. O orquestrador não sabe disso: ele só enxerga
+`ProvedorSinal`s que nunca lançam exceção e nunca travam.
+
+```
+fallback ( circuit breaker ( time limiter ( fonte real ) ) )
+```
+
+| Camada | O que faz | Configuração |
+|---|---|---|
+| Time limiter | Desiste da fonte que passa do tempo limite e interrompe a chamada | `tempo-limite=200ms` |
+| Circuit breaker | Abre quando 50% ou mais das últimas 10 chamadas falharam (a partir de 5 chamadas); aberto, a fonte é ignorada na hora. Depois de 10 s, 2 chamadas de teste verificam a recuperação | `risco.resiliencia.*` |
+| Fallback | Transforma qualquer falha em um sinal **degradado**, em vez de uma exceção | — |
+
+### O que um sinal degradado significa para a decisão
+
+Um sinal degradado tem peso 0, então fica fora da pontuação: o motor não inventa um risco
+que não recebeu. Além disso, a política de decisão é **fail-safe**: se algum sinal estiver
+degradado, `APROVAR` vira `REVISAR`. Uma transação que não foi totalmente verificada nunca é
+aprovada automaticamente, mas também não é recusada: um analista decide. `NEGAR` é mantido,
+porque os sinais que responderam já justificam a negação.
+
+O custo dessa escolha é que a fila de revisão cresce durante uma queda. As alternativas eram
+*fail-open* (aprovar, com mais risco de fraude) e *fail-closed* (negar, bloqueando clientes
+legítimos). A fase 4 adiciona métricas para que um circuito aberto fique visível e gere alerta.
+
+### Simulando uma queda
+
+Rode com a fonte de histórico mais lenta que o tempo limite:
+
+```bash
+./mvnw spring-boot:run -Dspring-boot.run.arguments=--risco.sinais.historico.latencia=500ms
+```
+
+Oito requisições iguais (dispositivo conhecido, valor habitual, que normalmente dariam `APROVAR`):
+
+```
+chamadas 1 a 5: REVISAR  degradada=true  ~210 ms | histórico: tempo limite excedido após 200 ms
+chamadas 6 a 8: REVISAR  degradada=true   ~60 ms | histórico: circuito aberto: fonte ignorada
+```
+
+As cinco primeiras chamadas esperam o tempo limite. Quando a taxa de falha passa de 50%,
+o circuito abre e as próximas chamadas pulam a fonte, então a latência cai de ~210 ms para
+~60 ms enquanto a fonte se recupera.
+
+## Como rodar
+
+Requisito: Java 21. O Maven é baixado pelo wrapper.
 
 ```bash
 ./mvnw spring-boot:run        # Windows: mvnw.cmd spring-boot:run
 ./mvnw test                   # Windows: mvnw.cmd test
 ```
 
-## Examples
+## Exemplos
 
-Known device, usual amount → `APPROVE` (score 8):
+Dispositivo conhecido, valor habitual → `APROVAR` (pontuação 8):
 
 ```bash
-curl -s -X POST localhost:8080/assessments -H "Content-Type: application/json" -d '{
-  "transactionId": "tx-1", "customerId": "cust-001",
-  "deviceId": "device-abc", "amount": 300.00, "type": "PIX"
+curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d '{
+  "idTransacao": "tx-1", "idCliente": "cliente-001",
+  "idDispositivo": "dispositivo-abc", "valor": 300.00, "tipo": "PIX"
 }'
 ```
 
-Unknown device → `REVIEW` (score 40):
+Dispositivo novo → `REVISAR` (pontuação 40):
 
 ```bash
-curl -s -X POST localhost:8080/assessments -H "Content-Type: application/json" -d '{
-  "transactionId": "tx-2", "customerId": "cust-001",
-  "deviceId": "device-new", "amount": 300.00, "type": "PIX"
+curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d '{
+  "idTransacao": "tx-2", "idCliente": "cliente-001",
+  "idDispositivo": "dispositivo-novo", "valor": 300.00, "tipo": "PIX"
 }'
 ```
 
-Unknown device and amount above 5× the average → `DENY` (score 78):
+Dispositivo novo e valor acima de 5× a média → `NEGAR` (pontuação 78):
 
 ```bash
-curl -s -X POST localhost:8080/assessments -H "Content-Type: application/json" -d '{
-  "transactionId": "tx-3", "customerId": "cust-001",
-  "deviceId": "device-new", "amount": 3000.00, "type": "PIX"
+curl -s -X POST localhost:8080/avaliacoes -H "Content-Type: application/json" -d '{
+  "idTransacao": "tx-3", "idCliente": "cliente-001",
+  "idDispositivo": "dispositivo-novo", "valor": 3000.00, "tipo": "PIX"
 }'
 ```
 
-Sample response:
+Exemplo de resposta:
 
 ```json
 {
-  "assessmentId": "5f0c...",
-  "transactionId": "tx-1",
-  "decision": "APPROVE",
-  "score": 8,
-  "degraded": false,
-  "signals": [
-    { "source": "deny-list", "score": 0, "weight": 0, "blocking": false, "degraded": false, "reason": "customer is not on the deny list" },
-    { "source": "device", "score": 5, "weight": 50, "blocking": false, "degraded": false, "reason": "known device" },
-    { "source": "customer-history", "score": 10, "weight": 50, "blocking": false, "degraded": false, "reason": "amount is within the customer's usual range" }
+  "idAvaliacao": "5f0c...",
+  "idTransacao": "tx-1",
+  "decisao": "APROVAR",
+  "pontuacao": 8,
+  "degradada": false,
+  "sinais": [
+    { "fonte": "lista-restritiva", "pontuacao": 0, "peso": 0, "bloqueante": false, "degradado": false, "motivo": "cliente não está na lista restritiva" },
+    { "fonte": "dispositivo", "pontuacao": 5, "peso": 50, "bloqueante": false, "degradado": false, "motivo": "dispositivo conhecido" },
+    { "fonte": "historico-cliente", "pontuacao": 10, "peso": 50, "bloqueante": false, "degradado": false, "motivo": "valor dentro do padrão do cliente" }
   ],
-  "assessedAt": "2026-11-10T12:00:00Z",
-  "processingTimeMs": 81
+  "avaliadoEm": "2026-11-10T12:00:00Z",
+  "tempoProcessamentoMs": 81
 }
 ```
 
-Invalid input returns `400` as RFC 9457 Problem Details.
+Uma entrada inválida devolve `400` no formato Problem Details (RFC 9457), com título
+"Requisição inválida".
 
-## Resilience
+## Roteiro
 
-Every signal source is wrapped in a decorator (`ResilientSignalProvider`) built with
-the Resilience4j core modules. The orchestrator does not know about it; it only sees
-`SignalProvider`s that never throw and never hang.
-
-```
-fallback ( circuit breaker ( time limiter ( real source ) ) )
-```
-
-| Layer | What it does | Setting |
-|---|---|---|
-| Time limiter | Gives up on a source slower than the budget and interrupts the call | `timeout=200ms` |
-| Circuit breaker | Opens when ≥ 50% of the last 10 calls failed (after 5 calls); while open, the source is skipped instantly. After 10 s, 2 trial calls test recovery | `risk.resilience.*` |
-| Fallback | Turns any failure into a **degraded** signal instead of an exception | — |
-
-### What a degraded signal means for the decision
-
-A degraded signal has weight 0, so it is left out of the score: the engine does not
-invent a risk value it never received. On top of that, the decision policy is
-**fail-safe**: if any signal is degraded, `APPROVE` becomes `REVIEW`. A transaction that
-was not fully checked is never auto-approved, but it is not refused either; an analyst
-decides. `DENY` is kept, since the remaining signals already justify it.
-
-The trade-off: during an outage the review queue grows. The alternatives were
-*fail-open* (approve, more fraud risk) and *fail-closed* (deny, legitimate customers
-blocked). Phase 4 adds metrics so an open circuit is visible and can be alerted on.
-
-### Simulating an outage
-
-Run with the history source slower than the timeout:
-
-```bash
-./mvnw spring-boot:run -Dspring-boot.run.arguments=--risk.signals.history.latency=500ms
-```
-
-Eight identical requests (known device, usual amount, normally `APPROVE`):
-
-```
-call 1-5: REVIEW  degraded=true  ~210 ms | history: timeout after 200 ms
-call 6-8: REVIEW  degraded=true   ~60 ms | history: circuit open: source skipped
-```
-
-The first five calls wait for the timeout. Once the failure rate crosses 50%, the
-circuit opens and the next calls skip the source, so latency drops from ~210 ms to
-~60 ms while the source recovers.
-
-## Roadmap
-
-- [x] **1. Core** — REST API, parallel signal providers, scoring and decision policy, tests
-- [x] **2a. Resilience** — timeouts, circuit breaker and fallback (Resilience4j), fail-safe decision
-- [ ] **2b. Idempotency** — same `transactionId` returns the same decision, with Redis
-- [ ] **3. Events** — publish decisions to Kafka, consumer and dead-letter topic
-- [ ] **4. Observability** — latency metrics per source (Micrometer), Prometheus and Grafana
-- [ ] **5. Security** — OAuth2 / JWT with Keycloak
-- [ ] **6. Camunda 8** — BPMN manual-review process for `REVIEW` decisions
+- [x] **1. Núcleo**: API REST, fontes de sinais em paralelo, pontuação, política de decisão e testes
+- [x] **2a. Resiliência**: tempo limite, circuit breaker e fallback (Resilience4j), decisão fail-safe
+- [ ] **2b. Idempotência**: o mesmo `idTransacao` devolve a mesma decisão, com Redis
+- [ ] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
+- [ ] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus e Grafana
+- [ ] **5. Segurança**: OAuth2 / JWT com Keycloak
+- [ ] **6. Camunda 8**: processo BPMN de revisão manual para as decisões `REVISAR`
