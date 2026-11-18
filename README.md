@@ -9,7 +9,7 @@ antifraude e score de risco faz.
 
 ## Tecnologias
 
-Java 21 · Spring Boot 4 · Resilience4j · Redis · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
+Java 21 · Spring Boot 4 · Resilience4j · Redis · Apache Kafka · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
 
 ## Arquitetura
 
@@ -31,7 +31,10 @@ adaptador/saida/sinal ───────────┘  (as fontes de sinais
 | `adaptador.saida.sinal` | Fontes simuladas: dispositivo, histórico do cliente e lista restritiva. |
 | `adaptador.saida.resiliencia` | `ProvedorSinalResiliente`: tempo limite, circuit breaker e fallback em volta de cada fonte. |
 | `adaptador.saida.redis` | `RepositorioAvaliacoesRedis`: guarda as avaliações no Redis com validade. |
-| `adaptador.entrada.web` | `POST /avaliacoes`, validação da entrada, montagem da resposta e tratamento de erros. |
+| `adaptador.saida.kafka` | `PublicadorDecisoesKafka` e o contrato `EventoDecisaoRisco`. |
+| `adaptador.saida.memoria` | `FilaRevisaoEmMemoria`: transações aguardando analista (substituída pelo Camunda na fase 6). |
+| `adaptador.entrada.kafka` | `ConsumidorDecisoes`: encaminha as decisões `REVISAR` para a revisão manual. |
+| `adaptador.entrada.web` | `POST /avaliacoes`, `GET /revisoes`, validação da entrada, montagem da resposta e tratamento de erros. |
 | `configuracao` | Conecta as classes sem framework ao Spring. |
 
 ### Por que as chamadas são paralelas
@@ -165,17 +168,81 @@ valor e tipo. `300`, `300.0` e `300.00` contam como o mesmo valor.
 TTL da chave no Redis: 86400 s
 ```
 
+## Eventos (Kafka)
+
+Cada decisão nova é publicada no tópico `decisoes-risco`. Um consumidor encaminha as decisões
+`REVISAR` para a fila de revisão manual (`GET /revisoes`).
+
+```
+POST /avaliacoes ─► avalia ─► venceu o SET NX? ─► publica ─► decisoes-risco (3 partições, chave = idCliente)
+                                                                  │
+                                                consumidor (grupo motor-risco-revisao)
+                                                                  │
+                                    REVISAR? ─► fila de revisão     falhou? ─► 2 novas tentativas ─► decisoes-risco-dlq
+```
+
+Exemplo de evento:
+
+```json
+{
+  "versao": 1, "idAvaliacao": "5f0c...", "idTransacao": "tx-2", "idCliente": "cliente-001",
+  "valor": 300.00, "tipo": "PIX", "decisao": "REVISAR", "pontuacao": 40,
+  "degradada": false, "avaliadoEm": "2026-11-10T12:00:00Z"
+}
+```
+
+### Decisões de projeto
+
+- **Só publica quem gravou a avaliação.** Um reenvio (idempotência) não gera evento duplicado.
+- **Entrega "pelo menos uma vez".** Se o Redis estiver fora do ar, um reenvio pode publicar de
+  novo; por isso o consumidor também é idempotente e ignora um `idAvaliacao` que já recebeu.
+- **Chave = `idCliente`.** As decisões de um cliente caem na mesma partição e são consumidas na
+  ordem em que foram publicadas.
+- **Produtor confiável:** `acks=all` e `enable.idempotence=true`.
+- **A publicação não atrasa a API.** O envio roda em outra virtual thread, com tempos curtos
+  (`max.block.ms=2000`), para que um Kafka fora do ar não segure a resposta.
+- **DLQ:** uma mensagem que falha tem mais 2 tentativas, com 1 s de intervalo, e depois vai para
+  `decisoes-risco-dlq`, com o motivo da falha nos cabeçalhos. Mensagem inválida (JSON quebrado,
+  campo obrigatório ausente, versão desconhecida) vai direto, porque tentar de novo não resolve.
+- **Contrato versionado.** O campo `versao` permite evoluir o evento sem quebrar quem já consome.
+- **O consumidor mora na mesma aplicação** para manter o projeto simples. Num sistema real, ele
+  estaria no serviço de revisão; aqui, os dois lados só conversam pelo tópico.
+
+### Limitação conhecida: perda de evento se o Kafka cair
+
+A decisão é devolvida ao cliente mesmo que a publicação falhe; nesse caso, o evento fica só no
+log. A solução de mercado é o **padrão Transactional Outbox**: gravar o evento em uma tabela, na
+mesma transação de banco que registra a decisão, e um processo separado publica no Kafka depois,
+com novas tentativas. Não foi implementado aqui porque exigiria um banco de dados só para isso.
+
+### Demonstração
+
+```
+POST /avaliacoes:
+  tx-aprovada -> APROVAR
+  tx-revisar  -> REVISAR
+  tx-revisar  -> REVISAR  (reenvio)
+GET /revisoes: 1 pendente(s)
+  tx-revisar pontuacao=40 degradada=false
+Mensagens por partição: decisoes-risco:0:0  decisoes-risco:1:2  decisoes-risco:2:0
+DLQ decisoes-risco-dlq: valor='mensagem invalida'
+```
+
+As duas decisões do mesmo cliente foram para a mesma partição. O reenvio não gerou uma terceira
+mensagem. A mensagem inválida, enviada direto no tópico, terminou na DLQ.
+
 ## Como rodar
 
 Requisitos: Java 21 e Docker. O Maven é baixado pelo wrapper.
 
 ```bash
-docker compose up -d          # sobe o Redis
+docker compose up -d          # sobe o Redis e o Kafka
 ./mvnw spring-boot:run        # Windows: mvnw.cmd spring-boot:run
-docker compose down           # derruba o Redis
+docker compose down           # derruba os contêineres
 ```
 
-A aplicação também sobe sem o Redis; nesse caso, funciona sem idempotência.
+A aplicação também sobe sem o Redis e sem o Kafka; nesse caso, funciona sem idempotência e
+sem eventos.
 
 ### Testes
 
@@ -183,8 +250,8 @@ A aplicação também sobe sem o Redis; nesse caso, funciona sem idempotência.
 ./mvnw test                   # Windows: mvnw.cmd test
 ```
 
-Os testes de idempotência sobem um Redis real em Docker com Testcontainers, então o Docker
-precisa estar rodando.
+Os testes de idempotência e de eventos sobem um Redis e um Kafka reais em Docker com
+Testcontainers, então o Docker precisa estar rodando.
 
 ## Exemplos
 
@@ -243,7 +310,7 @@ título "Conflito de idempotência".
 - [x] **1. Núcleo**: API REST, fontes de sinais em paralelo, pontuação, política de decisão e testes
 - [x] **2a. Resiliência**: tempo limite, circuit breaker e fallback (Resilience4j), decisão fail-safe
 - [x] **2b. Idempotência**: o mesmo `idTransacao` devolve a mesma decisão, com Redis
-- [ ] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
+- [x] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
 - [ ] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus e Grafana
 - [ ] **5. Segurança**: OAuth2 / JWT com Keycloak
 - [ ] **6. Camunda 8**: processo BPMN de revisão manual para as decisões `REVISAR`

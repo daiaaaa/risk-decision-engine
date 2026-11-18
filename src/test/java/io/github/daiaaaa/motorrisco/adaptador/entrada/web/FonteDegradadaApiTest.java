@@ -23,7 +23,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "risco.sinais.lista-restritiva.latencia=0ms",
         "risco.sinais.dispositivo.latencia=0ms",
         "risco.sinais.historico.latencia=2s",
-        "risco.resiliencia.tempo-limite=100ms"
+        "risco.resiliencia.tempo-limite=100ms",
+        "spring.kafka.listener.auto-startup=false",
+        "spring.kafka.admin.auto-create=false"
 })
 @AutoConfigureMockMvc
 class FonteDegradadaApiTest {

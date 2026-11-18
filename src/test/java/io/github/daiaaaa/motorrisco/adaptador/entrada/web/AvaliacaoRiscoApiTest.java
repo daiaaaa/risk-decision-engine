@@ -21,7 +21,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "risco.sinais.lista-restritiva.latencia=0ms",
         "risco.sinais.dispositivo.latencia=0ms",
-        "risco.sinais.historico.latencia=0ms"
+        "risco.sinais.historico.latencia=0ms",
+        "spring.kafka.listener.auto-startup=false",
+        "spring.kafka.admin.auto-create=false"
 })
 @AutoConfigureMockMvc
 class AvaliacaoRiscoApiTest {

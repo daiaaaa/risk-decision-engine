@@ -1,5 +1,6 @@
 package io.github.daiaaaa.motorrisco.aplicacao;
 
+import io.github.daiaaaa.motorrisco.aplicacao.porta.PublicadorDecisoes;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.RepositorioAvaliacoes;
 import io.github.daiaaaa.motorrisco.dominio.modelo.AvaliacaoRisco;
 import io.github.daiaaaa.motorrisco.dominio.modelo.Transacao;
@@ -11,7 +12,8 @@ import java.util.Optional;
  *
  * <ol>
  *   <li>Já existe avaliação para o idTransacao: devolve a guardada, sem avaliar de novo.</li>
- *   <li>Não existe: avalia e grava com "salvar se ausente".</li>
+ *   <li>Não existe: avalia, grava com "salvar se ausente" e, se a gravação foi desta
+ *       requisição, publica o evento da decisão.</li>
  *   <li>Se outra requisição gravou primeiro (corrida), devolve a dela, para que as duas
  *       respostas sejam iguais.</li>
  * </ol>
@@ -26,10 +28,14 @@ public class ServicoAvaliacaoIdempotente {
 
     private final ServicoAvaliacaoRisco avaliador;
     private final RepositorioAvaliacoes repositorio;
+    private final PublicadorDecisoes publicador;
 
-    public ServicoAvaliacaoIdempotente(ServicoAvaliacaoRisco avaliador, RepositorioAvaliacoes repositorio) {
+    public ServicoAvaliacaoIdempotente(ServicoAvaliacaoRisco avaliador,
+                                       RepositorioAvaliacoes repositorio,
+                                       PublicadorDecisoes publicador) {
         this.avaliador = avaliador;
         this.repositorio = repositorio;
+        this.publicador = publicador;
     }
 
     public ResultadoAvaliacao avaliar(Transacao transacao) {
@@ -44,6 +50,8 @@ public class ServicoAvaliacaoIdempotente {
         AvaliacaoRegistrada vencedora = repositorio.salvarSeAusente(new AvaliacaoRegistrada(impressao, nova));
 
         if (vencedora.avaliacao().idAvaliacao().equals(nova.idAvaliacao())) {
+            // Só quem gravou publica: um reenvio ou a requisição que perdeu a corrida não geram evento.
+            publicador.publicar(transacao, nova);
             return new ResultadoAvaliacao(nova, false);
         }
         return reaproveitar(vencedora, impressao, transacao.idTransacao());

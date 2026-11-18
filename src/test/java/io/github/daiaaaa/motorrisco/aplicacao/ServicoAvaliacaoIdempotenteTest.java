@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -32,9 +33,10 @@ class ServicoAvaliacaoIdempotenteTest {
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private final AtomicInteger avaliacoesFeitas = new AtomicInteger();
     private final RepositorioEmMemoria repositorio = new RepositorioEmMemoria();
+    private final List<String> publicadas = new CopyOnWriteArrayList<>();
 
-    private final ServicoAvaliacaoIdempotente servico =
-            new ServicoAvaliacaoIdempotente(avaliadorContandoChamadas(), repositorio);
+    private final ServicoAvaliacaoIdempotente servico = new ServicoAvaliacaoIdempotente(
+            avaliadorContandoChamadas(), repositorio, (transacao, avaliacao) -> publicadas.add(avaliacao.idAvaliacao()));
 
     @AfterEach
     void encerrar() {
@@ -48,6 +50,7 @@ class ServicoAvaliacaoIdempotenteTest {
         assertThat(resultado.repetida()).isFalse();
         assertThat(avaliacoesFeitas).hasValue(1);
         assertThat(repositorio.dados).containsKey("tx-1");
+        assertThat(publicadas).containsExactly(resultado.avaliacao().idAvaliacao());
     }
 
     @Test
@@ -58,6 +61,8 @@ class ServicoAvaliacaoIdempotenteTest {
         assertThat(segunda.repetida()).isTrue();
         assertThat(segunda.avaliacao()).isEqualTo(primeira.avaliacao());
         assertThat(avaliacoesFeitas).hasValue(1);
+        // O reenvio não gera um segundo evento.
+        assertThat(publicadas).hasSize(1);
     }
 
     @Test
@@ -76,6 +81,7 @@ class ServicoAvaliacaoIdempotenteTest {
                 .isInstanceOf(ConflitoIdempotenciaException.class)
                 .hasMessageContaining("tx-1");
         assertThat(avaliacoesFeitas).hasValue(1);
+        assertThat(publicadas).hasSize(1);
     }
 
     @Test
@@ -91,6 +97,8 @@ class ServicoAvaliacaoIdempotenteTest {
 
         assertThat(resultado.repetida()).isTrue();
         assertThat(resultado.avaliacao().idAvaliacao()).isEqualTo("avaliacao-da-outra");
+        // Quem perdeu a corrida não publica; o evento é responsabilidade de quem gravou.
+        assertThat(publicadas).isEmpty();
     }
 
     private ServicoAvaliacaoRisco avaliadorContandoChamadas() {

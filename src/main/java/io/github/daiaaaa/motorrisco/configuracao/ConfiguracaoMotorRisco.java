@@ -5,6 +5,7 @@ import io.github.daiaaaa.motorrisco.adaptador.saida.resiliencia.ProvedorSinalRes
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoAvaliacaoIdempotente;
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoAvaliacaoRisco;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.ProvedorSinal;
+import io.github.daiaaaa.motorrisco.aplicacao.porta.PublicadorDecisoes;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.RepositorioAvaliacoes;
 import io.github.daiaaaa.motorrisco.dominio.politica.CalculadoraRisco;
 import io.github.daiaaaa.motorrisco.dominio.politica.PoliticaDecisao;
@@ -113,7 +114,8 @@ public class ConfiguracaoMotorRisco {
 
     @Bean
     public ServicoAvaliacaoIdempotente servicoAvaliacaoIdempotente(ServicoAvaliacaoRisco avaliador,
-                                                                   RepositorioAvaliacoes repositorio) {
-        return new ServicoAvaliacaoIdempotente(avaliador, repositorio);
+                                                                   RepositorioAvaliacoes repositorio,
+                                                                   PublicadorDecisoes publicador) {
+        return new ServicoAvaliacaoIdempotente(avaliador, repositorio, publicador);
     }
 }

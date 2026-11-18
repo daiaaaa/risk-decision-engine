@@ -4,3 +4,10 @@ services:
     image: redis:7.4-alpine
     ports:
       - "6379:6379"
+
+  # Kafka em modo KRaft (sem ZooKeeper), com um único nó. A configuração padrão da
+  # imagem oficial já anuncia o broker em localhost:9092.
+  kafka:
+    image: apache/kafka:4.3.2
+    ports:
+      - "9092:9092"
