@@ -19,6 +19,7 @@ import org.springframework.security.web.SecurityFilterChain;
  *   <tr><td>GET /revisoes</td><td>analista</td><td>analistas de fraude</td></tr>
  *   <tr><td>/actuator/**</td><td>monitoramento</td><td>Prometheus</td></tr>
  *   <tr><td>/actuator/health/**</td><td>nenhum</td><td>probes do orquestrador (sem token)</td></tr>
+ *   <tr><td>/swagger-ui.html, /v3/api-docs</td><td>nenhum</td><td>desenvolvedores (desligado no perfil producao)</td></tr>
  * </table>
  */
 @Configuration
@@ -37,6 +38,9 @@ public class ConfiguracaoSeguranca {
                         .requestMatchers("/actuator/**").hasRole(MONITORAMENTO)
                         .requestMatchers(HttpMethod.POST, "/avaliacoes").hasRole(AVALIADOR)
                         .requestMatchers(HttpMethod.GET, "/revisoes").hasRole(ANALISTA)
+                        // Documentação da API. No perfil "producao" ela é desligada (404).
+                        .requestMatchers("/v3/api-docs", "/v3/api-docs/**",
+                                "/swagger-ui.html", "/swagger-ui/**").permitAll()
                         // Página de erro do Spring, usada quando uma resposta de erro é montada.
                         .requestMatchers("/error").permitAll()
                         // Qualquer endpoint novo nasce fechado.

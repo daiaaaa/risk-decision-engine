@@ -9,7 +9,7 @@ antifraude e score de risco faz.
 
 ## Tecnologias
 
-Java 21 · Spring Boot 4 · Spring Security (OAuth2 Resource Server) · Keycloak · Resilience4j · Redis · Apache Kafka · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
+Java 21 · Spring Boot 4 · Spring Security (OAuth2 Resource Server) · Keycloak · OpenAPI 3 (springdoc, Swagger UI) · Resilience4j · Redis · Apache Kafka · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
 
 ## Arquitetura
 
@@ -304,6 +304,46 @@ alerta CircuitoAberto:    pending aos 4 s, firing aos 34 s (fonte=historico-clie
 alerta MuitasDecisoesDegradadas: pending
 ```
 
+## Documentação da API (OpenAPI)
+
+| Endereço | O que tem |
+|---|---|
+| http://localhost:8080/swagger-ui.html | Swagger UI: documentação navegável, com botão *Authorize* |
+| http://localhost:8080/v3/api-docs | Contrato OpenAPI 3 em JSON |
+
+O contrato é gerado a partir do código (*code-first*) com a springdoc-openapi. Os records de
+entrada e saída e os controllers têm poucas anotações (`@Operation`, `@Schema`,
+`@ApiResponse`), e as validações do Bean Validation (`@NotBlank`, `@Positive`) viram campos
+obrigatórios e restrições no contrato, sem duplicação.
+
+**Autenticação pela Swagger UI.** O esquema de segurança aponta para o Keycloak, então o botão
+*Authorize* pede um token de verdade:
+
+- **clientCredentials** (sistemas): `client_id` = `sistema-pagamentos`, `client_secret` =
+  `segredo-dev-sistema-pagamentos`.
+- **authorizationCode** com PKCE (pessoas): `client_id` = `painel-analistas`, login com o usuário
+  `analista` / senha `analista`.
+
+Para isso, o Keycloak aceita chamadas do navegador vindas da Swagger UI (CORS) e a URL de
+retorno do login. Conferido com o Keycloak real:
+
+```
+contrato:  OpenAPI 3.1, POST /avaliacoes (respostas 200, 400, 401, 403, 409) e GET /revisoes
+CORS do token, origem http://localhost:8080:      200, Access-Control-Allow-Origin=http://localhost:8080
+CORS do token, origem de outro site:              403
+login com a URL de retorno da Swagger UI:         200, formulário de login
+login com uma URL de retorno não cadastrada:      400
+```
+
+**Produção.** Com `--spring.profiles.active=producao`, a documentação fica desligada (404). O
+contrato expõe toda a superfície da API e, numa empresa, costuma ser publicado no portal de
+APIs, não pela própria aplicação.
+
+**Code-first ou contract-first?** Aqui o contrato nasce do código, o que é simples e não deixa
+o contrato e o código divergirem. Em empresas com governança de APIs, é comum o caminho inverso
+(*contract-first*): o `openapi.yaml` é escrito e aprovado antes, e interfaces e DTOs são gerados
+a partir dele com o `openapi-generator`.
+
 ## Segurança
 
 A API é um **OAuth2 Resource Server**: não faz login nem guarda senhas. Cada requisição traz
@@ -316,6 +356,7 @@ JWKS), a validade, o emissor (`iss`) e a audiência (`aud`).
 | `GET /revisoes` | `analista` | usuário `analista` (cliente `painel-analistas`) | `authorization_code` com PKCE |
 | `/actuator/**` | `monitoramento` | cliente `prometheus` | `client_credentials` |
 | `/actuator/health/**` | nenhum | probes do orquestrador | sem token |
+| `/swagger-ui.html`, `/v3/api-docs` | nenhum | desenvolvedores (desligado no perfil `producao`) | sem token |
 | qualquer outro | negado | — | — |
 
 `401` significa sem token ou token inválido; `403` significa token válido sem o papel.

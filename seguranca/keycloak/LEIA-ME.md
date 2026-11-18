@@ -21,6 +21,11 @@ Cada cliente tem dois mapeadores de token:
 - **Papéis do realm:** coloca os papéis em `realm_access.roles`, que a API converte em
   autoridades do Spring Security.
 
+Para a Swagger UI (`http://localhost:8080/swagger-ui.html`) funcionar, os clientes
+`sistema-pagamentos` e `painel-analistas` aceitam chamadas do navegador vindas de
+`http://localhost:8080` (CORS), e o `painel-analistas` aceita a URL de retorno do login da
+Swagger UI (`/swagger-ui/oauth2-redirect.html`).
+
 O cliente `painel-analistas` também está com o *password grant* (`directAccessGrantsEnabled`)
 ligado, **só para a demonstração pela linha de comando**. Esse fluxo é desaconselhado pelo
 OAuth 2.1; um front-end real usa `authorization_code` com PKCE, que também está habilitado.
