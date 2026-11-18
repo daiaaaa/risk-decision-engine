@@ -1,0 +1,128 @@
+{
+  "uid": "motor-risco",
+  "title": "Motor de Decisão de Risco",
+  "description": "Decisões, latência por fonte de sinais, circuit breakers e idempotência.",
+  "tags": ["antifraude", "risco"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Decisões por minuto",
+      "description": "Avaliações novas por tipo de decisão. Reenvios não contam.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (decisao) (rate(risco_decisoes_total[1m])) * 60",
+          "legendFormat": "{{decisao}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Latência p95 por fonte de sinais",
+      "description": "Inclui timeouts: uma fonte que estoura o tempo limite aparece perto de 200 ms.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, fonte) (rate(risco_fonte_duracao_seconds_bucket[1m])))",
+          "legendFormat": "{{fonte}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Circuit breakers",
+      "description": "FECHADO = normal. ABERTO = fonte ignorada ou em teste de recuperação (semiaberto).",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "FECHADO", "color": "green" }, "1": { "text": "ABERTO", "color": "red" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (name) (resilience4j_circuitbreaker_state{state=~\"open|half_open\"})",
+          "legendFormat": "{{name}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Sinais degradados por minuto",
+      "description": "Vezes em que cada fonte falhou, estourou o tempo limite ou foi ignorada pelo circuito aberto.",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (fonte) (rate(risco_fonte_duracao_seconds_count{resultado=\"degradado\"}[1m])) * 60",
+          "legendFormat": "{{fonte}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Idempotência por minuto",
+      "description": "nova = avaliada agora; repetida = reenvio atendido pelo Redis; conflito = 409.",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (resultado) (rate(risco_idempotencia_total[1m])) * 60",
+          "legendFormat": "{{resultado}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Latência da API POST /avaliacoes (p50, p95, p99)",
+      "description": "Tempo visto pelo cliente, do recebimento da requisição até a resposta.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/avaliacoes\"}[1m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/avaliacoes\"}[1m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/avaliacoes\"}[1m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    }
+  ]
+}

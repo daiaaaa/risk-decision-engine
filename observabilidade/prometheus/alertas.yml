@@ -1,0 +1,41 @@
+# Regras de alerta. Aparecem em http://localhost:9090/alerts.
+# Num ambiente real, o Alertmanager enviaria a notificação (Slack, e-mail, PagerDuty).
+groups:
+  - name: motor-risco
+    rules:
+      # "Não fechado" = aberto ou semiaberto. Uma fonte que continua fora do ar alterna entre
+      # os dois (a cada 10 s o circuito testa a fonte, falha e reabre), então exigir "open"
+      # por 30 s seguidos faria o alerta nunca disparar.
+      - alert: CircuitoAberto
+        expr: max by (name) (resilience4j_circuitbreaker_state{state=~"open|half_open"}) == 1
+        for: 30s
+        labels:
+          severidade: alta
+        annotations:
+          resumo: "Fonte de sinais {{ $labels.name }} fora do ar"
+          descricao: >-
+            O circuit breaker da fonte {{ $labels.name }} está aberto há mais de 30 s.
+            As transações estão sendo avaliadas sem esse sinal e as que seriam aprovadas
+            vão para revisão manual.
+
+      - alert: MuitasDecisoesDegradadas
+        expr: >-
+          sum(rate(risco_decisoes_total{degradada="true"}[1m]))
+          / sum(rate(risco_decisoes_total[1m])) > 0.2
+        for: 1m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "Mais de 20% das decisões estão degradadas"
+          descricao: "Uma ou mais fontes de sinais estão falhando ou lentas; a fila de revisão vai crescer."
+
+      - alert: LatenciaAltaApi
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_server_requests_seconds_bucket{uri="/avaliacoes"}[1m]))) > 0.3
+        for: 1m
+        labels:
+          severidade: media
+        annotations:
+          resumo: "p95 da API acima de 300 ms"
+          descricao: "Decisões em tempo real estão demorando mais que o orçamento de latência."

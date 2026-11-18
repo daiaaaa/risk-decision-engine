@@ -1,19 +1,25 @@
 package io.github.daiaaaa.motorrisco.configuracao;
 
+import io.github.daiaaaa.motorrisco.adaptador.saida.metricas.MetricasMicrometer;
+import io.github.daiaaaa.motorrisco.adaptador.saida.metricas.ProvedorSinalMedido;
 import io.github.daiaaaa.motorrisco.adaptador.saida.redis.RepositorioAvaliacoesRedis;
 import io.github.daiaaaa.motorrisco.adaptador.saida.resiliencia.ProvedorSinalResiliente;
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoAvaliacaoIdempotente;
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoAvaliacaoRisco;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.ProvedorSinal;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.PublicadorDecisoes;
+import io.github.daiaaaa.motorrisco.aplicacao.porta.RegistroMetricas;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.RepositorioAvaliacoes;
 import io.github.daiaaaa.motorrisco.dominio.politica.CalculadoraRisco;
 import io.github.daiaaaa.motorrisco.dominio.politica.PoliticaDecisao;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.micrometer.tagged.TaggedCircuitBreakerMetrics;
 import io.github.resilience4j.timelimiter.TimeLimiter;
 import io.github.resilience4j.timelimiter.TimeLimiterConfig;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.binder.MeterBinder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -62,8 +68,8 @@ public class ConfiguracaoMotorRisco {
     }
 
     /**
-     * Um circuit breaker por fonte, todos com as mesmas configurações. Mantê-los em um
-     * registro permite que a fase 4 exporte o estado de cada um como métrica.
+     * Um circuit breaker por fonte, todos com as mesmas configurações. Ficam em um
+     * registro para que o estado de cada um possa ser exportado como métrica.
      */
     @Bean
     public CircuitBreakerRegistry registroCircuitBreakers(PropriedadesResiliencia props) {
@@ -80,8 +86,29 @@ public class ConfiguracaoMotorRisco {
     }
 
     /**
-     * Os provedores reais são componentes do Spring. Aqui cada um é envolvido pelo
-     * decorator de resiliência, então o orquestrador só enxerga as versões protegidas.
+     * Exporta o estado e as chamadas de cada circuit breaker como métricas
+     * ({@code resilience4j_circuitbreaker_state} no Prometheus). O Spring Boot liga
+     * automaticamente qualquer bean MeterBinder ao registro de métricas.
+     */
+    @Bean
+    public MeterBinder metricasCircuitBreakers(CircuitBreakerRegistry registro) {
+        return TaggedCircuitBreakerMetrics.ofCircuitBreakerRegistry(registro);
+    }
+
+    @Bean
+    public RegistroMetricas registroMetricas(MeterRegistry meterRegistry) {
+        return new MetricasMicrometer(meterRegistry);
+    }
+
+    /**
+     * Os provedores reais são componentes do Spring. Aqui cada um recebe duas camadas:
+     *
+     * <pre>
+     *   medição ( resiliência ( provedor real ) )
+     * </pre>
+     *
+     * A medição fica por fora para registrar o tempo que o orquestrador realmente espera,
+     * incluindo timeouts. O orquestrador só enxerga as versões protegidas e medidas.
      */
     @Bean
     public ServicoAvaliacaoRisco servicoAvaliacaoRisco(List<ProvedorSinal> provedoresReais,
@@ -90,7 +117,8 @@ public class ConfiguracaoMotorRisco {
                                                        CalculadoraRisco calculadora,
                                                        PoliticaDecisao politica,
                                                        ExecutorService executorSinais,
-                                                       Clock relogio) {
+                                                       Clock relogio,
+                                                       MeterRegistry meterRegistry) {
         TimeLimiterConfig configTempoLimite = TimeLimiterConfig.custom()
                 .timeoutDuration(props.tempoLimite())
                 .cancelRunningFuture(true)
@@ -99,7 +127,9 @@ public class ConfiguracaoMotorRisco {
                 .<ProvedorSinal>map(provedor -> {
                     CircuitBreaker circuitBreaker = registro.circuitBreaker(provedor.nome());
                     TimeLimiter timeLimiter = TimeLimiter.of(provedor.nome(), configTempoLimite);
-                    return new ProvedorSinalResiliente(provedor, circuitBreaker, timeLimiter, executorSinais);
+                    ProvedorSinal resiliente =
+                            new ProvedorSinalResiliente(provedor, circuitBreaker, timeLimiter, executorSinais);
+                    return new ProvedorSinalMedido(resiliente, meterRegistry);
                 })
                 .toList();
         return new ServicoAvaliacaoRisco(provedoresProtegidos, calculadora, politica, executorSinais, relogio);
@@ -115,7 +145,8 @@ public class ConfiguracaoMotorRisco {
     @Bean
     public ServicoAvaliacaoIdempotente servicoAvaliacaoIdempotente(ServicoAvaliacaoRisco avaliador,
                                                                    RepositorioAvaliacoes repositorio,
-                                                                   PublicadorDecisoes publicador) {
-        return new ServicoAvaliacaoIdempotente(avaliador, repositorio, publicador);
+                                                                   PublicadorDecisoes publicador,
+                                                                   RegistroMetricas metricas) {
+        return new ServicoAvaliacaoIdempotente(avaliador, repositorio, publicador, metricas);
     }
 }

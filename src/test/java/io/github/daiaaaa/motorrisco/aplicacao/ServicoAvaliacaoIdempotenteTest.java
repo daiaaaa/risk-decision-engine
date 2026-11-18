@@ -1,6 +1,7 @@
 package io.github.daiaaaa.motorrisco.aplicacao;
 
 import io.github.daiaaaa.motorrisco.aplicacao.porta.ProvedorSinal;
+import io.github.daiaaaa.motorrisco.aplicacao.porta.RegistroMetricas;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.RepositorioAvaliacoes;
 import io.github.daiaaaa.motorrisco.dominio.modelo.AvaliacaoRisco;
 import io.github.daiaaaa.motorrisco.dominio.modelo.Decisao;
@@ -35,8 +36,11 @@ class ServicoAvaliacaoIdempotenteTest {
     private final RepositorioEmMemoria repositorio = new RepositorioEmMemoria();
     private final List<String> publicadas = new CopyOnWriteArrayList<>();
 
+    private final MetricasEmMemoria metricas = new MetricasEmMemoria();
+
     private final ServicoAvaliacaoIdempotente servico = new ServicoAvaliacaoIdempotente(
-            avaliadorContandoChamadas(), repositorio, (transacao, avaliacao) -> publicadas.add(avaliacao.idAvaliacao()));
+            avaliadorContandoChamadas(), repositorio,
+            (transacao, avaliacao) -> publicadas.add(avaliacao.idAvaliacao()), metricas);
 
     @AfterEach
     void encerrar() {
@@ -51,6 +55,7 @@ class ServicoAvaliacaoIdempotenteTest {
         assertThat(avaliacoesFeitas).hasValue(1);
         assertThat(repositorio.dados).containsKey("tx-1");
         assertThat(publicadas).containsExactly(resultado.avaliacao().idAvaliacao());
+        assertThat(metricas.emitidas).hasValue(1);
     }
 
     @Test
@@ -61,8 +66,10 @@ class ServicoAvaliacaoIdempotenteTest {
         assertThat(segunda.repetida()).isTrue();
         assertThat(segunda.avaliacao()).isEqualTo(primeira.avaliacao());
         assertThat(avaliacoesFeitas).hasValue(1);
-        // O reenvio não gera um segundo evento.
+        // O reenvio não gera um segundo evento nem conta como decisão nova.
         assertThat(publicadas).hasSize(1);
+        assertThat(metricas.emitidas).hasValue(1);
+        assertThat(metricas.repetidas).hasValue(1);
     }
 
     @Test
@@ -82,6 +89,7 @@ class ServicoAvaliacaoIdempotenteTest {
                 .hasMessageContaining("tx-1");
         assertThat(avaliacoesFeitas).hasValue(1);
         assertThat(publicadas).hasSize(1);
+        assertThat(metricas.conflitos).hasValue(1);
     }
 
     @Test
@@ -97,8 +105,10 @@ class ServicoAvaliacaoIdempotenteTest {
 
         assertThat(resultado.repetida()).isTrue();
         assertThat(resultado.avaliacao().idAvaliacao()).isEqualTo("avaliacao-da-outra");
-        // Quem perdeu a corrida não publica; o evento é responsabilidade de quem gravou.
+        // Quem perdeu a corrida não publica nem conta como decisão nova.
         assertThat(publicadas).isEmpty();
+        assertThat(metricas.emitidas).hasValue(0);
+        assertThat(metricas.repetidas).hasValue(1);
     }
 
     private ServicoAvaliacaoRisco avaliadorContandoChamadas() {
@@ -115,6 +125,17 @@ class ServicoAvaliacaoIdempotenteTest {
 
     private static Transacao transacao(String id, String valor) {
         return new Transacao(id, "cliente-001", "dispositivo-abc", new BigDecimal(valor), TipoTransacao.PIX);
+    }
+
+    private static class MetricasEmMemoria implements RegistroMetricas {
+
+        final AtomicInteger emitidas = new AtomicInteger();
+        final AtomicInteger repetidas = new AtomicInteger();
+        final AtomicInteger conflitos = new AtomicInteger();
+
+        public void decisaoEmitida(AvaliacaoRisco avaliacao) { emitidas.incrementAndGet(); }
+        public void respostaRepetida() { repetidas.incrementAndGet(); }
+        public void conflitoIdempotencia() { conflitos.incrementAndGet(); }
     }
 
     /** Repositório em memória com a mesma semântica de "salvar se ausente" do Redis. */

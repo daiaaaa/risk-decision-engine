@@ -1,6 +1,7 @@
 package io.github.daiaaaa.motorrisco.aplicacao;
 
 import io.github.daiaaaa.motorrisco.aplicacao.porta.PublicadorDecisoes;
+import io.github.daiaaaa.motorrisco.aplicacao.porta.RegistroMetricas;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.RepositorioAvaliacoes;
 import io.github.daiaaaa.motorrisco.dominio.modelo.AvaliacaoRisco;
 import io.github.daiaaaa.motorrisco.dominio.modelo.Transacao;
@@ -29,13 +30,16 @@ public class ServicoAvaliacaoIdempotente {
     private final ServicoAvaliacaoRisco avaliador;
     private final RepositorioAvaliacoes repositorio;
     private final PublicadorDecisoes publicador;
+    private final RegistroMetricas metricas;
 
     public ServicoAvaliacaoIdempotente(ServicoAvaliacaoRisco avaliador,
                                        RepositorioAvaliacoes repositorio,
-                                       PublicadorDecisoes publicador) {
+                                       PublicadorDecisoes publicador,
+                                       RegistroMetricas metricas) {
         this.avaliador = avaliador;
         this.repositorio = repositorio;
         this.publicador = publicador;
+        this.metricas = metricas;
     }
 
     public ResultadoAvaliacao avaliar(Transacao transacao) {
@@ -50,18 +54,20 @@ public class ServicoAvaliacaoIdempotente {
         AvaliacaoRegistrada vencedora = repositorio.salvarSeAusente(new AvaliacaoRegistrada(impressao, nova));
 
         if (vencedora.avaliacao().idAvaliacao().equals(nova.idAvaliacao())) {
-            // Só quem gravou publica: um reenvio ou a requisição que perdeu a corrida não geram evento.
+            // Só quem gravou publica e conta: um reenvio ou a requisição que perdeu a corrida não.
             publicador.publicar(transacao, nova);
+            metricas.decisaoEmitida(nova);
             return new ResultadoAvaliacao(nova, false);
         }
         return reaproveitar(vencedora, impressao, transacao.idTransacao());
     }
 
-    private static ResultadoAvaliacao reaproveitar(AvaliacaoRegistrada registro, String impressao,
-                                                   String idTransacao) {
+    private ResultadoAvaliacao reaproveitar(AvaliacaoRegistrada registro, String impressao, String idTransacao) {
         if (!registro.impressaoRequisicao().equals(impressao)) {
+            metricas.conflitoIdempotencia();
             throw new ConflitoIdempotenciaException(idTransacao);
         }
+        metricas.respostaRepetida();
         return new ResultadoAvaliacao(registro.avaliacao(), true);
     }
 }

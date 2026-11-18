@@ -9,7 +9,7 @@ antifraude e score de risco faz.
 
 ## Tecnologias
 
-Java 21 · Spring Boot 4 · Resilience4j · Redis · Apache Kafka · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
+Java 21 · Spring Boot 4 · Resilience4j · Redis · Apache Kafka · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
 
 ## Arquitetura
 
@@ -30,6 +30,7 @@ adaptador/saida/sinal ───────────┘  (as fontes de sinais
 | `aplicacao.porta` | `ProvedorSinal` (contrato das fontes de sinais) e `RepositorioAvaliacoes` (onde as avaliações ficam guardadas). |
 | `adaptador.saida.sinal` | Fontes simuladas: dispositivo, histórico do cliente e lista restritiva. |
 | `adaptador.saida.resiliencia` | `ProvedorSinalResiliente`: tempo limite, circuit breaker e fallback em volta de cada fonte. |
+| `adaptador.saida.metricas` | `MetricasMicrometer` (métricas de negócio) e `ProvedorSinalMedido` (latência por fonte). |
 | `adaptador.saida.redis` | `RepositorioAvaliacoesRedis`: guarda as avaliações no Redis com validade. |
 | `adaptador.saida.kafka` | `PublicadorDecisoesKafka` e o contrato `EventoDecisaoRisco`. |
 | `adaptador.saida.memoria` | `FilaRevisaoEmMemoria`: transações aguardando analista (substituída pelo Camunda na fase 6). |
@@ -231,12 +232,82 @@ DLQ decisoes-risco-dlq: valor='mensagem invalida'
 As duas decisões do mesmo cliente foram para a mesma partição. O reenvio não gerou uma terceira
 mensagem. A mensagem inválida, enviada direto no tópico, terminou na DLQ.
 
+## Observabilidade
+
+| Endereço | O que tem |
+|---|---|
+| http://localhost:8080/actuator/health | Saúde detalhada, incluindo Redis |
+| http://localhost:8080/actuator/health/readiness | Se a aplicação pode receber tráfego |
+| http://localhost:8080/actuator/prometheus | Métricas no formato do Prometheus |
+| http://localhost:9090 | Prometheus (consultas e alertas em `/alerts`) |
+| http://localhost:3000 | Grafana, painel "Motor de Decisão de Risco" (acesso anônimo de leitura; `admin`/`admin` para editar) |
+
+### Métricas
+
+| Métrica | Pergunta que responde |
+|---|---|
+| `risco_decisoes_total{decisao, degradada}` | Quantas decisões de cada tipo? Quantas foram tomadas com alguma fonte fora do ar? |
+| `risco_idempotencia_total{resultado}` | Quantas avaliações novas, reenvios atendidos pelo Redis e conflitos 409? |
+| `risco_fonte_duracao_seconds{fonte, resultado}` | Quanto cada fonte de sinais leva (p95, p99)? Quantas vezes veio degradada? |
+| `resilience4j_circuitbreaker_state{name, state}` | Qual circuit breaker está aberto? |
+| `http_server_requests_seconds{uri}` | Qual a latência da API vista pelo cliente? |
+
+As métricas de negócio passam por uma porta (`RegistroMetricas`): a aplicação diz o que
+aconteceu e só o adaptador conhece o Micrometer. A latência por fonte é medida por mais um
+decorator, por fora do de resiliência, para registrar o tempo que o orquestrador realmente
+espera, timeouts incluídos:
+
+```
+medição ( resiliência ( fonte real ) )
+```
+
+As tags só têm valores de baixa cardinalidade (tipo de decisão, nome da fonte). Usar
+`idTransacao` ou `idCliente` como tag criaria uma série nova no Prometheus por transação.
+
+### Alertas (`observabilidade/prometheus/alertas.yml`)
+
+| Alerta | Quando dispara |
+|---|---|
+| `CircuitoAberto` | O circuit breaker de uma fonte não está fechado há mais de 30 s |
+| `MuitasDecisoesDegradadas` | Mais de 20% das decisões no último minuto tiveram alguma fonte fora do ar |
+| `LatenciaAltaApi` | O p95 de `POST /avaliacoes` passou de 300 ms por 1 minuto |
+
+Uma lição da demonstração: a primeira versão de `CircuitoAberto` exigia o estado `open` por
+30 s seguidos e **nunca disparava**. Com a fonte ainda fora do ar, o circuito passa para
+semiaberto a cada 10 s, testa a fonte, falha e reabre, então o estado nunca fica 30 s em
+`open`. A regra certa é "não está fechado" (`open` ou `half_open`).
+
+### Health checks
+
+`/actuator/health/readiness` não depende do Redis nem do Kafka, de propósito: sem eles a
+aplicação continua decidindo (sem idempotência e sem eventos), então um orquestrador como o
+Kubernetes não deve tirá-la do ar. O `/actuator/health` completo mostra o estado de cada
+dependência para quem está investigando.
+
+Os endpoints do Actuator estão abertos; a fase 5 os protege junto com a API.
+
+### Demonstração
+
+Com a fonte de histórico mais lenta que o tempo limite
+(`--risco.sinais.historico.latencia=500ms`), 20 requisições que normalmente seriam aprovadas:
+
+```
+decisões:                 REVISAR=20 (todas degradadas)
+circuit breakers:         historico-cliente=ABERTO, dispositivo=FECHADO, lista-restritiva=FECHADO
+latência p95 por fonte:   dispositivo=66 ms, historico-cliente=220 ms, lista-restritiva=34 ms
+sinais degradados:        historico-cliente=58, demais=0
+Prometheus:               alvo motor-risco health=up
+Grafana:                  painel com 6 gráficos, fonte de dados Prometheus OK
+alerta CircuitoAberto:    pending aos 4 s, firing aos 34 s (fonte=historico-cliente)
+alerta MuitasDecisoesDegradadas: pending
+```
+
 ## Como rodar
 
 Requisitos: Java 21 e Docker. O Maven é baixado pelo wrapper.
 
 ```bash
-docker compose up -d          # sobe o Redis e o Kafka
+docker compose up -d          # sobe Redis, Kafka, Prometheus e Grafana
 ./mvnw spring-boot:run        # Windows: mvnw.cmd spring-boot:run
 docker compose down           # derruba os contêineres
 ```
@@ -311,6 +382,6 @@ título "Conflito de idempotência".
 - [x] **2a. Resiliência**: tempo limite, circuit breaker e fallback (Resilience4j), decisão fail-safe
 - [x] **2b. Idempotência**: o mesmo `idTransacao` devolve a mesma decisão, com Redis
 - [x] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
-- [ ] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus e Grafana
+- [x] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus, alertas e Grafana
 - [ ] **5. Segurança**: OAuth2 / JWT com Keycloak
 - [ ] **6. Camunda 8**: processo BPMN de revisão manual para as decisões `REVISAR`
