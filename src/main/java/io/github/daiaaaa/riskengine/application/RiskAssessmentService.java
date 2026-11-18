@@ -20,8 +20,9 @@ import java.util.concurrent.Executor;
  * Orchestrates a risk assessment: fan-out to every signal provider in parallel,
  * fan-in the results, score them and apply the decision policy.
  *
- * <p>Phase 1 limitation (on purpose): if one provider fails or hangs, the whole
- * assessment fails or hangs. Phase 2 adds timeouts, circuit breakers and fallbacks.
+ * <p>This class assumes providers do not throw or hang. That guarantee comes from
+ * wrapping each provider in a resilience decorator (timeout, circuit breaker, fallback)
+ * when the application is wired; the orchestrator itself stays simple.
  */
 public class RiskAssessmentService {
 

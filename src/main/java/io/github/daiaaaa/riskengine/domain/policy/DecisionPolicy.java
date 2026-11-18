@@ -6,13 +6,20 @@ import io.github.daiaaaa.riskengine.domain.model.RiskSignal;
 import java.util.List;
 
 /**
- * Turns a score into a decision. Blocking rules win over the score.
+ * Turns a score into a decision. Rules are applied in this order:
  *
- * <pre>
- *   score &lt; reviewThreshold                  -&gt; APPROVE
- *   reviewThreshold &lt;= score &lt; denyThreshold -&gt; REVIEW
- *   score &gt;= denyThreshold                    -&gt; DENY
- * </pre>
+ * <ol>
+ *   <li>Any blocking signal -&gt; DENY.</li>
+ *   <li>Score thresholds:
+ *     <pre>
+ *       score &lt; reviewThreshold                  -&gt; APPROVE
+ *       reviewThreshold &lt;= score &lt; denyThreshold -&gt; REVIEW
+ *       score &gt;= denyThreshold                    -&gt; DENY
+ *     </pre>
+ *   </li>
+ *   <li>Fail-safe: if any signal is degraded, APPROVE becomes REVIEW. We never
+ *       auto-approve a transaction that was not fully checked.</li>
+ * </ol>
  */
 public class DecisionPolicy {
 
@@ -32,6 +39,14 @@ public class DecisionPolicy {
         if (signals.stream().anyMatch(RiskSignal::blocking)) {
             return Decision.DENY;
         }
+        Decision byScore = byScore(score);
+        if (byScore == Decision.APPROVE && signals.stream().anyMatch(RiskSignal::degraded)) {
+            return Decision.REVIEW;
+        }
+        return byScore;
+    }
+
+    private Decision byScore(int score) {
         if (score >= denyThreshold) {
             return Decision.DENY;
         }

@@ -17,12 +17,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RiskAssessmentServiceTest {
 
@@ -67,18 +65,16 @@ class RiskAssessmentServiceTest {
     }
 
     @Test
-    void failingProviderFailsTheWholeAssessment() {
-        // Documents the phase 1 limitation that phase 2 (resilience) will fix.
-        SignalProvider broken = new SignalProvider() {
-            public String name() { return "broken"; }
-            public RiskSignal evaluate(Transaction t) { throw new IllegalStateException("bureau down"); }
-        };
+    void unavailableSourceIsLeftOutOfTheScoreAndPreventsApproval() {
         RiskAssessmentService service = serviceWith(
-                fixed("ok", RiskSignal.scored("ok", 10, 50, "fine")), broken);
+                fixed("device", RiskSignal.scored("device", 5, 50, "known device")),
+                fixed("history", RiskSignal.unavailable("history", "timeout")));
 
-        assertThatThrownBy(() -> service.assess(transaction))
-                .isInstanceOf(CompletionException.class)
-                .hasRootCauseMessage("bureau down");
+        RiskAssessment result = service.assess(transaction);
+
+        // Only the device signal counts: score 5, which alone would mean APPROVE.
+        assertThat(result.score()).isEqualTo(5);
+        assertThat(result.decision()).isEqualTo(Decision.REVIEW);
     }
 
     private RiskAssessmentService serviceWith(SignalProvider... providers) {

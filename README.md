@@ -9,7 +9,7 @@ risk-scoring platform does.
 
 ## Stack
 
-Java 21 · Spring Boot 4 · Maven · JUnit 5 · AssertJ
+Java 21 · Spring Boot 4 · Resilience4j · Maven · JUnit 5 · AssertJ
 
 ## Architecture
 
@@ -29,6 +29,7 @@ adapter/out/signal ───────┘  (signal sources implement the port)
 | `application` | `RiskAssessmentService`: fan-out to every provider, fan-in, score, decide. |
 | `application.port` | `SignalProvider`: the contract every signal source implements. |
 | `adapter.out.signal` | Simulated sources: device, customer history, deny list. |
+| `adapter.out.resilience` | `ResilientSignalProvider`: timeout, circuit breaker and fallback around each source. |
 | `adapter.in.web` | `POST /assessments`, input validation, response mapping. |
 | `config` | Wires the framework-free classes into Spring. |
 
@@ -122,10 +123,11 @@ Sample response:
   "transactionId": "tx-1",
   "decision": "APPROVE",
   "score": 8,
+  "degraded": false,
   "signals": [
-    { "source": "deny-list", "score": 0, "weight": 0, "blocking": false, "reason": "customer is not on the deny list" },
-    { "source": "device", "score": 5, "weight": 50, "blocking": false, "reason": "known device" },
-    { "source": "customer-history", "score": 10, "weight": 50, "blocking": false, "reason": "amount is within the customer's usual range" }
+    { "source": "deny-list", "score": 0, "weight": 0, "blocking": false, "degraded": false, "reason": "customer is not on the deny list" },
+    { "source": "device", "score": 5, "weight": 50, "blocking": false, "degraded": false, "reason": "known device" },
+    { "source": "customer-history", "score": 10, "weight": 50, "blocking": false, "degraded": false, "reason": "amount is within the customer's usual range" }
   ],
   "assessedAt": "2026-11-10T12:00:00Z",
   "processingTimeMs": 81
@@ -134,16 +136,58 @@ Sample response:
 
 Invalid input returns `400` as RFC 9457 Problem Details.
 
-## Known limitation (phase 1)
+## Resilience
 
-If one signal source fails or hangs, the whole assessment fails or hangs.
-This is covered by the test `failingProviderFailsTheWholeAssessment` and is
-addressed in phase 2.
+Every signal source is wrapped in a decorator (`ResilientSignalProvider`) built with
+the Resilience4j core modules. The orchestrator does not know about it; it only sees
+`SignalProvider`s that never throw and never hang.
+
+```
+fallback ( circuit breaker ( time limiter ( real source ) ) )
+```
+
+| Layer | What it does | Setting |
+|---|---|---|
+| Time limiter | Gives up on a source slower than the budget and interrupts the call | `timeout=200ms` |
+| Circuit breaker | Opens when ≥ 50% of the last 10 calls failed (after 5 calls); while open, the source is skipped instantly. After 10 s, 2 trial calls test recovery | `risk.resilience.*` |
+| Fallback | Turns any failure into a **degraded** signal instead of an exception | — |
+
+### What a degraded signal means for the decision
+
+A degraded signal has weight 0, so it is left out of the score: the engine does not
+invent a risk value it never received. On top of that, the decision policy is
+**fail-safe**: if any signal is degraded, `APPROVE` becomes `REVIEW`. A transaction that
+was not fully checked is never auto-approved, but it is not refused either; an analyst
+decides. `DENY` is kept, since the remaining signals already justify it.
+
+The trade-off: during an outage the review queue grows. The alternatives were
+*fail-open* (approve, more fraud risk) and *fail-closed* (deny, legitimate customers
+blocked). Phase 4 adds metrics so an open circuit is visible and can be alerted on.
+
+### Simulating an outage
+
+Run with the history source slower than the timeout:
+
+```bash
+./mvnw spring-boot:run -Dspring-boot.run.arguments=--risk.signals.history.latency=500ms
+```
+
+Eight identical requests (known device, usual amount, normally `APPROVE`):
+
+```
+call 1-5: REVIEW  degraded=true  ~210 ms | history: timeout after 200 ms
+call 6-8: REVIEW  degraded=true   ~60 ms | history: circuit open: source skipped
+```
+
+The first five calls wait for the timeout. Once the failure rate crosses 50%, the
+circuit opens and the next calls skip the source, so latency drops from ~210 ms to
+~60 ms while the source recovers.
 
 ## Roadmap
 
 - [x] **1. Core** — REST API, parallel signal providers, scoring and decision policy, tests
-- [ ] **2. Resilience** — timeouts, circuit breaker and fallback (Resilience4j), idempotency with Redis
+- [x] **2a. Resilience** — timeouts, circuit breaker and fallback (Resilience4j), fail-safe decision
+- [ ] **2b. Idempotency** — same `transactionId` returns the same decision, with Redis
 - [ ] **3. Events** — publish decisions to Kafka, consumer and dead-letter topic
 - [ ] **4. Observability** — latency metrics per source (Micrometer), Prometheus and Grafana
 - [ ] **5. Security** — OAuth2 / JWT with Keycloak

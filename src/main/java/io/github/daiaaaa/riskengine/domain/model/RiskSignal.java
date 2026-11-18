@@ -9,9 +9,11 @@ import java.util.Objects;
  * @param score    risk from 0 (no risk) to 100 (maximum risk)
  * @param weight   how much this signal counts in the final score; 0 means it only acts as a rule
  * @param blocking when true, the transaction is denied regardless of the final score
+ * @param degraded when true, the source did not answer and this is a fallback, not a real opinion
  * @param reason   human-readable explanation, useful for analysts and audits
  */
-public record RiskSignal(String source, int score, int weight, boolean blocking, String reason) {
+public record RiskSignal(String source, int score, int weight, boolean blocking, boolean degraded,
+                         String reason) {
 
     public RiskSignal {
         Objects.requireNonNull(source, "source");
@@ -22,13 +24,24 @@ public record RiskSignal(String source, int score, int weight, boolean blocking,
         if (weight < 0) {
             throw new IllegalArgumentException("weight must not be negative");
         }
+        if (blocking && degraded) {
+            throw new IllegalArgumentException("a degraded signal cannot be blocking");
+        }
     }
 
     public static RiskSignal scored(String source, int score, int weight, String reason) {
-        return new RiskSignal(source, score, weight, false, reason);
+        return new RiskSignal(source, score, weight, false, false, reason);
     }
 
     public static RiskSignal blocking(String source, String reason) {
-        return new RiskSignal(source, 100, 0, true, reason);
+        return new RiskSignal(source, 100, 0, true, false, reason);
+    }
+
+    /**
+     * Fallback used when a source fails, times out or has its circuit open.
+     * Weight 0 keeps it out of the score: we do not invent a risk value we never received.
+     */
+    public static RiskSignal unavailable(String source, String reason) {
+        return new RiskSignal(source, 0, 0, false, true, reason);
     }
 }

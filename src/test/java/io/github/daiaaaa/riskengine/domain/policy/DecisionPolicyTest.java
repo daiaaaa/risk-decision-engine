@@ -36,6 +36,24 @@ class DecisionPolicyTest {
     }
 
     @Test
+    void degradedSignalTurnsApproveIntoReview() {
+        List<RiskSignal> signals = List.of(
+                RiskSignal.scored("device", 5, 50, "known device"),
+                RiskSignal.unavailable("customer-history", "timeout"));
+
+        assertThat(policy.decide(5, signals)).isEqualTo(Decision.REVIEW);
+    }
+
+    @Test
+    void degradedSignalDoesNotSoftenDeny() {
+        List<RiskSignal> signals = List.of(
+                RiskSignal.scored("device", 90, 50, "suspicious device"),
+                RiskSignal.unavailable("customer-history", "timeout"));
+
+        assertThat(policy.decide(90, signals)).isEqualTo(Decision.DENY);
+    }
+
+    @Test
     void rejectsInvalidThresholds() {
         assertThatIllegalArgumentException().isThrownBy(() -> new DecisionPolicy(80, 40));
         assertThatIllegalArgumentException().isThrownBy(() -> new DecisionPolicy(-1, 40));
