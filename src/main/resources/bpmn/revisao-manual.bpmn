@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+                  xmlns:modeler="http://camunda.org/schema/modeler/1.0"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  id="DefinicoesRevisaoManual"
+                  targetNamespace="http://github.com/daiaaaa/risk-decision-engine"
+                  exporter="risk-decision-engine"
+                  modeler:executionPlatform="Camunda Cloud"
+                  modeler:executionPlatformVersion="8.10.0">
+
+  <bpmn:message id="MensagemDecisaoRevisar" name="decisao-revisar" />
+
+  <bpmn:process id="revisao-manual" name="Revisão manual de transação" isExecutable="true">
+    <bpmn:documentation>Transação que recebeu a decisão REVISAR do motor de risco. Um analista de fraude aprova ou nega; se o prazo acabar antes, a transação é negada.</bpmn:documentation>
+
+    <!-- Iniciado por mensagem: o publicador usa messageId = idAvaliacao, então uma decisão
+         entregue duas vezes pelo Kafka não cria dois processos. -->
+    <bpmn:startEvent id="DecisaoRevisarRecebida" name="Decisão REVISAR recebida">
+      <bpmn:outgoing>FluxoParaAnalise</bpmn:outgoing>
+      <bpmn:messageEventDefinition id="DefinicaoMensagemInicio" messageRef="MensagemDecisaoRevisar" />
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="AnalisarTransacao" name="Analisar transação">
+      <bpmn:extensionElements>
+        <zeebe:userTask />
+        <zeebe:assignmentDefinition candidateGroups="analistas" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>FluxoParaAnalise</bpmn:incoming>
+      <bpmn:outgoing>FluxoParaDecisao</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Prazo do analista. O valor vem da variável prazoRevisao (duração ISO 8601, ex.: PT30M). -->
+    <bpmn:boundaryEvent id="PrazoEsgotado" name="Prazo esgotado" attachedToRef="AnalisarTransacao">
+      <bpmn:outgoing>FluxoPrazoEsgotado</bpmn:outgoing>
+      <bpmn:timerEventDefinition id="DefinicaoPrazo">
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">=prazoRevisao</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+
+    <bpmn:exclusiveGateway id="DecisaoDoAnalista" name="Decisão do analista?" default="FluxoNegar">
+      <bpmn:incoming>FluxoParaDecisao</bpmn:incoming>
+      <bpmn:outgoing>FluxoAprovar</bpmn:outgoing>
+      <bpmn:outgoing>FluxoNegar</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- As três saídas usam o mesmo job worker; a decisão final chega pela variável local decisaoFinal. -->
+    <bpmn:serviceTask id="LiberarTransacao" name="Liberar transação">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="registrar-decisao-final" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;APROVADA&#34;" target="decisaoFinal" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>FluxoAprovar</bpmn:incoming>
+      <bpmn:outgoing>FluxoFimAprovada</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:serviceTask id="BloquearTransacao" name="Bloquear transação">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="registrar-decisao-final" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;NEGADA&#34;" target="decisaoFinal" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>FluxoNegar</bpmn:incoming>
+      <bpmn:outgoing>FluxoFimNegada</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:serviceTask id="NegarPorPrazo" name="Negar por prazo">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="registrar-decisao-final" />
+        <zeebe:ioMapping>
+          <zeebe:input source="=&#34;NEGADA_POR_PRAZO&#34;" target="decisaoFinal" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>FluxoPrazoEsgotado</bpmn:incoming>
+      <bpmn:outgoing>FluxoFimPrazo</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="TransacaoAprovada" name="Transação aprovada">
+      <bpmn:incoming>FluxoFimAprovada</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:endEvent id="TransacaoNegada" name="Transação negada">
+      <bpmn:incoming>FluxoFimNegada</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:endEvent id="TransacaoNegadaPorPrazo" name="Negada por prazo">
+      <bpmn:incoming>FluxoFimPrazo</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="FluxoParaAnalise" sourceRef="DecisaoRevisarRecebida" targetRef="AnalisarTransacao" />
+    <bpmn:sequenceFlow id="FluxoParaDecisao" sourceRef="AnalisarTransacao" targetRef="DecisaoDoAnalista" />
+    <bpmn:sequenceFlow id="FluxoAprovar" name="APROVAR" sourceRef="DecisaoDoAnalista" targetRef="LiberarTransacao">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression">=decisaoAnalista = "APROVAR"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="FluxoNegar" name="NEGAR" sourceRef="DecisaoDoAnalista" targetRef="BloquearTransacao" />
+    <bpmn:sequenceFlow id="FluxoPrazoEsgotado" sourceRef="PrazoEsgotado" targetRef="NegarPorPrazo" />
+    <bpmn:sequenceFlow id="FluxoFimAprovada" sourceRef="LiberarTransacao" targetRef="TransacaoAprovada" />
+    <bpmn:sequenceFlow id="FluxoFimNegada" sourceRef="BloquearTransacao" targetRef="TransacaoNegada" />
+    <bpmn:sequenceFlow id="FluxoFimPrazo" sourceRef="NegarPorPrazo" targetRef="TransacaoNegadaPorPrazo" />
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="DiagramaRevisaoManual">
+    <bpmndi:BPMNPlane id="PlanoRevisaoManual" bpmnElement="revisao-manual">
+      <bpmndi:BPMNShape id="DecisaoRevisarRecebida_di" bpmnElement="DecisaoRevisarRecebida">
+        <dc:Bounds x="152" y="182" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="128" y="225" width="85" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="AnalisarTransacao_di" bpmnElement="AnalisarTransacao">
+        <dc:Bounds x="250" y="160" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="PrazoEsgotado_di" bpmnElement="PrazoEsgotado">
+        <dc:Bounds x="282" y="222" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="320" y="263" width="78" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="DecisaoDoAnalista_di" bpmnElement="DecisaoDoAnalista" isMarkerVisible="true">
+        <dc:Bounds x="405" y="175" width="50" height="50" />
+        <bpmndi:BPMNLabel><dc:Bounds x="386" y="232" width="88" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="LiberarTransacao_di" bpmnElement="LiberarTransacao">
+        <dc:Bounds x="510" y="60" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BloquearTransacao_di" bpmnElement="BloquearTransacao">
+        <dc:Bounds x="510" y="160" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="NegarPorPrazo_di" bpmnElement="NegarPorPrazo">
+        <dc:Bounds x="510" y="290" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="TransacaoAprovada_di" bpmnElement="TransacaoAprovada">
+        <dc:Bounds x="672" y="82" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="652" y="125" width="76" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="TransacaoNegada_di" bpmnElement="TransacaoNegada">
+        <dc:Bounds x="672" y="182" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="655" y="225" width="70" height="27" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="TransacaoNegadaPorPrazo_di" bpmnElement="TransacaoNegadaPorPrazo">
+        <dc:Bounds x="672" y="312" width="36" height="36" />
+        <bpmndi:BPMNLabel><dc:Bounds x="648" y="355" width="85" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="FluxoParaAnalise_di" bpmnElement="FluxoParaAnalise">
+        <di:waypoint x="188" y="200" /><di:waypoint x="250" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoParaDecisao_di" bpmnElement="FluxoParaDecisao">
+        <di:waypoint x="350" y="200" /><di:waypoint x="405" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoAprovar_di" bpmnElement="FluxoAprovar">
+        <di:waypoint x="430" y="175" /><di:waypoint x="430" y="100" /><di:waypoint x="510" y="100" />
+        <bpmndi:BPMNLabel><dc:Bounds x="440" y="83" width="54" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoNegar_di" bpmnElement="FluxoNegar">
+        <di:waypoint x="455" y="200" /><di:waypoint x="510" y="200" />
+        <bpmndi:BPMNLabel><dc:Bounds x="462" y="182" width="40" height="14" /></bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoPrazoEsgotado_di" bpmnElement="FluxoPrazoEsgotado">
+        <di:waypoint x="300" y="258" /><di:waypoint x="300" y="330" /><di:waypoint x="510" y="330" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoFimAprovada_di" bpmnElement="FluxoFimAprovada">
+        <di:waypoint x="610" y="100" /><di:waypoint x="672" y="100" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoFimNegada_di" bpmnElement="FluxoFimNegada">
+        <di:waypoint x="610" y="200" /><di:waypoint x="672" y="200" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="FluxoFimPrazo_di" bpmnElement="FluxoFimPrazo">
+        <di:waypoint x="610" y="330" /><di:waypoint x="672" y="330" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

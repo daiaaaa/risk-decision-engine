@@ -3,9 +3,6 @@ package io.github.daiaaaa.motorrisco.configuracao;
 import io.github.daiaaaa.motorrisco.adaptador.entrada.kafka.EventoInvalidoException;
 import io.github.daiaaaa.motorrisco.adaptador.saida.kafka.PublicadorDecisoesKafka;
 import io.github.daiaaaa.motorrisco.adaptador.saida.kafka.TopicosKafka;
-import io.github.daiaaaa.motorrisco.adaptador.saida.memoria.FilaRevisaoEmMemoria;
-import io.github.daiaaaa.motorrisco.aplicacao.ServicoRevisaoManual;
-import io.github.daiaaaa.motorrisco.aplicacao.porta.FilaRevisao;
 import io.github.daiaaaa.motorrisco.aplicacao.porta.PublicadorDecisoes;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
@@ -58,15 +55,5 @@ public class ConfiguracaoKafka {
                                                  JsonMapper json,
                                                  ExecutorService executorSinais) {
         return new PublicadorDecisoesKafka(kafka, json, executorSinais);
-    }
-
-    @Bean
-    public FilaRevisao filaRevisao() {
-        return new FilaRevisaoEmMemoria();
-    }
-
-    @Bean
-    public ServicoRevisaoManual servicoRevisaoManual(FilaRevisao fila) {
-        return new ServicoRevisaoManual(fila);
     }
 }

@@ -14,20 +14,20 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
  * A validação de assinatura, emissor e audiência fica de fora: é feita pelo Spring Security
  * e conferida na demonstração com o Keycloak real.
  */
-final class Tokens {
+public final class Tokens {
 
     private Tokens() {
     }
 
-    static JwtRequestPostProcessor avaliador() {
+    public static JwtRequestPostProcessor avaliador() {
         return comPapel("sistema-pagamentos", "avaliador");
     }
 
-    static JwtRequestPostProcessor analista() {
+    public static JwtRequestPostProcessor analista() {
         return comPapel("painel-analistas", "analista");
     }
 
-    static JwtRequestPostProcessor monitoramento() {
+    public static JwtRequestPostProcessor monitoramento() {
         return comPapel("prometheus", "monitoramento");
     }
 

@@ -25,7 +25,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "risco.sinais.dispositivo.latencia=0ms",
         "risco.sinais.historico.latencia=0ms",
         "spring.kafka.listener.auto-startup=false",
-        "spring.kafka.admin.auto-create=false"
+        "spring.kafka.admin.auto-create=false",
+        "risco.revisao.motor=memoria"
 })
 @AutoConfigureMockMvc
 class ObservabilidadeApiTest {

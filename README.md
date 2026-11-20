@@ -9,7 +9,7 @@ antifraude e score de risco faz.
 
 ## Tecnologias
 
-Java 21 · Spring Boot 4 · Spring Security (OAuth2 Resource Server) · Keycloak · OpenAPI 3 (springdoc, Swagger UI) · Resilience4j · Redis · Apache Kafka · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
+Java 21 · Spring Boot 4 · Spring Security (OAuth2 Resource Server) · Keycloak · OpenAPI 3 (springdoc, Swagger UI) · Resilience4j · Redis · Apache Kafka · Camunda 8 (Zeebe) · Micrometer · Prometheus · Grafana · Docker Compose · Maven · JUnit 5 · AssertJ · Testcontainers
 
 ## Arquitetura
 
@@ -33,9 +33,10 @@ adaptador/saida/sinal ───────────┘  (as fontes de sinais
 | `adaptador.saida.metricas` | `MetricasMicrometer` (métricas de negócio) e `ProvedorSinalMedido` (latência por fonte). |
 | `adaptador.saida.redis` | `RepositorioAvaliacoesRedis`: guarda as avaliações no Redis com validade. |
 | `adaptador.saida.kafka` | `PublicadorDecisoesKafka` e o contrato `EventoDecisaoRisco`. |
-| `adaptador.saida.memoria` | `FilaRevisaoEmMemoria`: transações aguardando analista (substituída pelo Camunda na fase 6). |
+| `adaptador.saida.memoria` | `FilaRevisaoEmMemoria`: fila de revisão sem framework (`risco.revisao.motor=memoria`, usada em parte dos testes). |
+| `adaptador.saida.camunda` | `FilaRevisaoCamunda`: fila de revisão apoiada no processo BPMN "revisao-manual" (Camunda 8). `TrabalhadorRegistrarDecisaoFinal`: job worker que registra o resultado de cada caminho do processo. |
 | `adaptador.entrada.kafka` | `ConsumidorDecisoes`: encaminha as decisões `REVISAR` para a revisão manual. |
-| `adaptador.entrada.web` | `POST /avaliacoes`, `GET /revisoes`, validação da entrada, montagem da resposta e tratamento de erros. |
+| `adaptador.entrada.web` | `POST /avaliacoes`, `GET /revisoes`, `POST /revisoes/{idTarefa}/decisao`, validação da entrada, montagem da resposta e tratamento de erros. |
 | `adaptador.entrada.web.seguranca` | `ConversorPapeisKeycloak`: papéis do token viram autoridades do Spring Security. |
 | `configuracao` | Conecta as classes sem framework ao Spring. `ConfiguracaoSeguranca` define quem acessa cada endpoint. |
 
@@ -409,18 +410,89 @@ curl -s -X POST http://localhost:8180/realms/motor-risco/protocol/openid-connect
 
 e enviar no cabeçalho `Authorization: Bearer <access_token>`.
 
+## Revisão manual (Camunda 8)
+
+Uma decisão `REVISAR` não fica só numa lista: ela abre uma instância do processo BPMN
+**"revisao-manual"**, rodando num Camunda 8 real (Zeebe).
+
+```
+decisao-revisar (mensagem) ──► Analisar transação (user task, grupo "analistas")
+                                          │
+                              prazo esgotado (timer, boundary event)
+                                          │
+                     ┌────────────────────┼────────────────────┐
+                     ▼                    ▼                    ▼
+              decisaoAnalista       decisaoAnalista        prazo esgotado
+                = APROVAR             = NEGAR
+                     │                    │                    │
+              Liberar transação    Bloquear transação    Negar por prazo
+                     │                    │                    │
+              Transação aprovada   Transação negada     Negada por prazo
+```
+
+As três tarefas de serviço usam o mesmo job worker (`registrar-decisao-final`); qual caminho
+rodou se vê pela variável `decisaoFinal`. O prazo (`risco.revisao.prazo`, padrão `PT30M`) é um
+*boundary timer* na user task: se o analista não decidir a tempo, o processo nega a transação
+sozinho, sem o analista precisar fazer nada.
+
+### Por que BPMN para isso
+
+A revisão manual tem *estado* (pendente, decidida, expirada) e um *prazo* que precisa disparar
+uma ação sozinho, sem ninguém consultando um relógio. Um motor de processos como o Camunda
+cuida disso de fábrica: o timer dispara mesmo que a aplicação reinicie entre o começo da
+revisão e o prazo, porque o estado vive no Zeebe, não na memória da aplicação.
+
+### Decisões de projeto
+
+- **Processo iniciado por mensagem com `messageId = idAvaliacao`.** É a idempotência nativa do
+  Zeebe: se o Kafka entregar a mesma decisão duas vezes (ver [Eventos](#eventos-kafka)), a
+  segunda publicação da mensagem é rejeitada (`409 ALREADY_EXISTS`) e não abre um segundo
+  processo para a mesma avaliação.
+- **Sem correlation key** (`withoutCorrelationKey()`). Cada mensagem já é única pelo
+  `messageId`; não há necessidade de correlacionar com uma instância existente.
+- **Camunda "lightweight", sem autenticação própria.** Zeebe, Operate e Tasklist rodam num só
+  contêiner, com H2 em arquivo, exatamente como o quickstart oficial para desenvolvimento local.
+  Esse Camunda é separado do Keycloak da aplicação: não há papel novo nele, e a API do motor de
+  risco continua sendo a única porta de entrada autenticada para abrir e decidir revisões.
+- **Motor plugável** (`risco.revisao.motor=camunda|memoria`). A maior parte dos testes usa
+  `memoria` (sem Docker, sem Camunda) para testar as regras de negócio; só o
+  `RevisaoManualProcessTest` testa o processo BPMN de ponta a ponta, contra um Camunda real.
+- **`CamundaClient` como bean `@Lazy`** (`ConfiguracaoCamunda`). Nos testes com
+  `@CamundaSpringProcessTest`, o Camunda "de verdade" (um contêiner do Testcontainers) só existe
+  depois que o contexto Spring já subiu; resolver o client no primeiro uso, e não na criação do
+  bean, evita que o adaptador fique apontando para o Camunda errado.
+- **BPMN implantado por `@Deployment`**, não pela propriedade `camunda.client.deployment.resources`.
+  A propriedade implanta usando o client "eager" do startup; nos testes, isso significa implantar
+  no Camunda errado (ou em nenhum). `@Deployment` reage ao client correto em cada caso.
+
+### Demonstração
+
+```
+docker compose up -d                 # sobe o Camunda em localhost:26500 (gRPC) e localhost:8083 (REST/Tasklist)
+POST /avaliacoes (dispositivo novo):  REVISAR
+GET  /revisoes:                       1 pendente, idTarefa=2251799813685732
+POST /revisoes/2251799813685732/decisao {"decisao":"APROVAR"}: 204
+GET  /revisoes:                       0 pendentes
+Tasklist (http://localhost:8083):     processo "revisao-manual" concluído, caminho "Liberar transação"
+```
+
+Prazo esgotado (teste automatizado, `RevisaoManualProcessTest`): o relógio do próprio Camunda
+é avançado 31 minutos (`CamundaProcessTestContext.increaseTime`), sem esperar de verdade; o
+processo nega a transação pelo caminho "Negar por prazo", sem nenhuma decisão do analista.
+
 ## Como rodar
 
 Requisitos: Java 21 e Docker. O Maven é baixado pelo wrapper.
 
 ```bash
-docker compose up -d          # sobe Redis, Kafka, Keycloak, Prometheus e Grafana
+docker compose up -d          # sobe Redis, Kafka, Keycloak, Camunda, Prometheus e Grafana
 ./mvnw spring-boot:run        # Windows: mvnw.cmd spring-boot:run
 docker compose down           # derruba os contêineres
 ```
 
-A aplicação também sobe sem o Redis e sem o Kafka; nesse caso, funciona sem idempotência e
-sem eventos.
+A aplicação também sobe sem o Redis, o Kafka e o Camunda; nesse caso, funciona sem
+idempotência, sem eventos e sem a revisão manual (troque para
+`risco.revisao.motor=memoria` se quiser revisão manual sem o Camunda).
 
 ### Testes
 
@@ -428,8 +500,10 @@ sem eventos.
 ./mvnw test                   # Windows: mvnw.cmd test
 ```
 
-Os testes de idempotência e de eventos sobem um Redis e um Kafka reais em Docker com
-Testcontainers, então o Docker precisa estar rodando.
+Os testes de idempotência, de eventos e do processo BPMN de revisão manual sobem,
+respectivamente, um Redis, um Kafka e um Camunda reais em Docker com Testcontainers, então o
+Docker precisa estar rodando. O teste do Camunda (`RevisaoManualProcessTest`) é o mais lento:
+sobe um contêiner `camunda/camunda` completo por padrão.
 
 ## Exemplos
 
@@ -499,4 +573,4 @@ título "Conflito de idempotência".
 - [x] **3. Eventos**: publicação das decisões no Kafka, consumidor e tópico de mensagens mortas (DLQ)
 - [x] **4. Observabilidade**: métricas de latência por fonte (Micrometer), Prometheus, alertas e Grafana
 - [x] **5. Segurança**: OAuth2 / JWT com Keycloak, papéis por endpoint, Actuator protegido
-- [ ] **6. Camunda 8**: processo BPMN de revisão manual para as decisões `REVISAR`
+- [x] **6. Camunda 8**: processo BPMN de revisão manual para as decisões `REVISAR`, com prazo e negação automática

@@ -2,7 +2,7 @@ package io.github.daiaaaa.motorrisco.adaptador.entrada.web;
 
 import io.github.daiaaaa.motorrisco.adaptador.saida.kafka.TopicosKafka;
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoRevisaoManual;
-import io.github.daiaaaa.motorrisco.dominio.modelo.RevisaoPendente;
+import io.github.daiaaaa.motorrisco.dominio.modelo.TarefaRevisao;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
@@ -42,7 +42,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "risco.sinais.lista-restritiva.latencia=0ms",
         "risco.sinais.dispositivo.latencia=0ms",
-        "risco.sinais.historico.latencia=0ms"
+        "risco.sinais.historico.latencia=0ms",
+        "spring.kafka.listener.auto-startup=true",
+        "risco.revisao.motor=memoria"
 })
 @AutoConfigureMockMvc
 @Testcontainers
@@ -108,7 +110,7 @@ class EventosKafkaTest {
     }
 
     private List<String> idsEmRevisao() {
-        return revisoes.pendentes().stream().map(RevisaoPendente::idTransacao).toList();
+        return revisoes.pendentes().stream().map(t -> t.revisao().idTransacao()).toList();
     }
 
     private static String cabecalhos(ConsumerRecord<String, String> registro) {

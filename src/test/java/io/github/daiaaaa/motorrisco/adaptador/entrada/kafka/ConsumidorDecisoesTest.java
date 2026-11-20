@@ -5,6 +5,7 @@ import io.github.daiaaaa.motorrisco.adaptador.saida.memoria.FilaRevisaoEmMemoria
 import io.github.daiaaaa.motorrisco.aplicacao.ServicoRevisaoManual;
 import io.github.daiaaaa.motorrisco.dominio.modelo.Decisao;
 import io.github.daiaaaa.motorrisco.dominio.modelo.RevisaoPendente;
+import io.github.daiaaaa.motorrisco.dominio.modelo.TarefaRevisao;
 import io.github.daiaaaa.motorrisco.dominio.modelo.TipoTransacao;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
@@ -26,7 +27,7 @@ class ConsumidorDecisoesTest {
         consumidor.receber(mensagem("avaliacao-1", Decisao.REVISAR, EventoDecisaoRisco.VERSAO_ATUAL));
 
         assertThat(servico.pendentes())
-                .extracting(RevisaoPendente::idAvaliacao)
+                .extracting(TarefaRevisao::idTarefa)
                 .containsExactly("avaliacao-1");
     }
 

@@ -30,6 +30,27 @@ services:
     volumes:
       - ./seguranca/keycloak:/opt/keycloak/data/import:ro
 
+  # Camunda 8 "lightweight": Zeebe + Operate + Tasklist num único container, com H2 em arquivo.
+  # Sem autenticação (API pública), como no quickstart oficial; é o padrão do Camunda para
+  # desenvolvimento local, e não o mesmo Keycloak usado pela API do motor de risco.
+  # Operate/Tasklist: http://localhost:8083 (demo/demo). gRPC do Zeebe: localhost:26500.
+  camunda:
+    image: camunda/camunda:8.10.10
+    ports:
+      - "26500:26500" # gRPC (client)
+      - "8083:8080"   # REST + Operate + Tasklist
+    environment:
+      CAMUNDA_SECURITY_AUTHENTICATION_UNPROTECTEDAPI: "true"
+      CAMUNDA_DATA_SECONDARYSTORAGE_TYPE: rdbms
+      CAMUNDA_DATA_SECONDARYSTORAGE_RDBMS_URL: jdbc:h2:file:/usr/local/camunda/camunda-data/h2db
+    volumes:
+      - camunda-data:/usr/local/camunda/camunda-data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health/readiness"]
+      interval: 5s
+      retries: 30
+      start_period: 20s
+
   # Coleta as métricas da aplicação, que roda na máquina host (fora do Docker).
   prometheus:
     image: prom/prometheus:v3.16.0
@@ -43,6 +64,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - keycloak
+      - camunda
 
   # Painéis em http://localhost:3000. Acesso anônimo só de leitura; para editar,
   # entre com admin/admin. Configuração apenas para uso local.
@@ -59,3 +81,6 @@ services:
       - ./observabilidade/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
+
+volumes:
+  camunda-data:

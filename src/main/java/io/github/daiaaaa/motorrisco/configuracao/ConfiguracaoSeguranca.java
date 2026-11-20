@@ -16,7 +16,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <table>
  *   <tr><th>Endpoint</th><th>Papel</th><th>Quem tem</th></tr>
  *   <tr><td>POST /avaliacoes</td><td>avaliador</td><td>sistemas que pedem decisão (ex.: pagamentos)</td></tr>
- *   <tr><td>GET /revisoes</td><td>analista</td><td>analistas de fraude</td></tr>
+ *   <tr><td>GET /revisoes, POST /revisoes/{id}/decisao</td><td>analista</td><td>analistas de fraude</td></tr>
  *   <tr><td>/actuator/**</td><td>monitoramento</td><td>Prometheus</td></tr>
  *   <tr><td>/actuator/health/**</td><td>nenhum</td><td>probes do orquestrador (sem token)</td></tr>
  *   <tr><td>/swagger-ui.html, /v3/api-docs</td><td>nenhum</td><td>desenvolvedores (desligado no perfil producao)</td></tr>
@@ -38,6 +38,7 @@ public class ConfiguracaoSeguranca {
                         .requestMatchers("/actuator/**").hasRole(MONITORAMENTO)
                         .requestMatchers(HttpMethod.POST, "/avaliacoes").hasRole(AVALIADOR)
                         .requestMatchers(HttpMethod.GET, "/revisoes").hasRole(ANALISTA)
+                        .requestMatchers(HttpMethod.POST, "/revisoes/*/decisao").hasRole(ANALISTA)
                         // Documentação da API. No perfil "producao" ela é desligada (404).
                         .requestMatchers("/v3/api-docs", "/v3/api-docs/**",
                                 "/swagger-ui.html", "/swagger-ui/**").permitAll()
